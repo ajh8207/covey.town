@@ -355,6 +355,7 @@
                  "height":180.333333333333,
                  "id":6,
                  "name":"Stairs to basement",
+                 "opacity":1,
                  "properties":[
                         {
                          "name":"target",
@@ -372,6 +373,7 @@
                  "height":0,
                  "id":9,
                  "name":"upstairs_target",
+                 "opacity":1,
                  "point":true,
                  "rotation":0,
                  "type":"",
@@ -384,6 +386,7 @@
                  "height":182.994839833802,
                  "id":11,
                  "name":"Stairs Up",
+                 "opacity":1,
                  "properties":[
                         {
                          "name":"target",
@@ -401,6 +404,7 @@
                  "height":0,
                  "id":12,
                  "name":"upstairs_target",
+                 "opacity":1,
                  "point":true,
                  "rotation":0,
                  "type":"",
@@ -413,6 +417,7 @@
                  "height":125.333333333333,
                  "id":22,
                  "name":"Foyer Table 6",
+                 "opacity":1,
                  "rotation":0,
                  "type":"ConversationArea",
                  "visible":true,
@@ -424,6 +429,7 @@
                  "height":125.333,
                  "id":23,
                  "name":"Foyer Table 7",
+                 "opacity":1,
                  "rotation":0,
                  "type":"ConversationArea",
                  "visible":true,
@@ -435,6 +441,7 @@
                  "height":125.333,
                  "id":24,
                  "name":"Foyer Table 4",
+                 "opacity":1,
                  "rotation":0,
                  "type":"ConversationArea",
                  "visible":true,
@@ -446,6 +453,7 @@
                  "height":125.333,
                  "id":25,
                  "name":"Foyer Table 5",
+                 "opacity":1,
                  "rotation":0,
                  "type":"ConversationArea",
                  "visible":true,
@@ -457,6 +465,7 @@
                  "height":125.333,
                  "id":26,
                  "name":"Foyer Table 2",
+                 "opacity":1,
                  "rotation":0,
                  "type":"ConversationArea",
                  "visible":true,
@@ -468,6 +477,7 @@
                  "height":125.333,
                  "id":27,
                  "name":"Foyer Table 3",
+                 "opacity":1,
                  "rotation":0,
                  "type":"ConversationArea",
                  "visible":true,
@@ -479,6 +489,7 @@
                  "height":125.333,
                  "id":28,
                  "name":"Foyer Table 1",
+                 "opacity":1,
                  "rotation":0,
                  "type":"ConversationArea",
                  "visible":true,
@@ -490,6 +501,7 @@
                  "height":223.999666666667,
                  "id":30,
                  "name":"Tic Tac Toe 1",
+                 "opacity":1,
                  "properties":[
                         {
                          "name":"type",
@@ -507,6 +519,7 @@
                  "height":224,
                  "id":31,
                  "name":"Tic Tac Toe 2",
+                 "opacity":1,
                  "properties":[
                         {
                          "name":"type",
@@ -524,6 +537,7 @@
                  "height":123.333333333333,
                  "id":35,
                  "name":"Fish tank",
+                 "opacity":1,
                  "properties":[
                         {
                          "name":"video",
@@ -541,6 +555,7 @@
                  "height":150.833333333333,
                  "id":37,
                  "name":"Basement TV",
+                 "opacity":1,
                  "properties":[
                         {
                          "name":"video",
@@ -558,6 +573,7 @@
                  "height":92.2796984663374,
                  "id":39,
                  "name":"Connect Four 1",
+                 "opacity":1,
                  "properties":[
                         {
                          "name":"type",
@@ -575,6 +591,7 @@
                  "height":83.8442547785938,
                  "id":43,
                  "name":"Connect Four 2",
+                 "opacity":1,
                  "properties":[
                         {
                          "name":"type",
@@ -592,6 +609,7 @@
                  "height":0,
                  "id":45,
                  "name":"Spawn Point",
+                 "opacity":1,
                  "point":true,
                  "rotation":0,
                  "type":"",
@@ -604,6 +622,7 @@
                  "height":216.317265322473,
                  "id":48,
                  "name":"Basement Dining Table 1",
+                 "opacity":1,
                  "rotation":0,
                  "type":"ConversationArea",
                  "visible":true,
@@ -612,15 +631,16 @@
                  "y":1061.55695019362
                 }, 
                 {
-                 "height":0,
-                 "id":49,
-                 "name":"",
+                 "height":37.3333333333333,
+                 "id":52,
+                 "name":"Graveyard Shift",
+                 "opacity":1,
                  "rotation":0,
-                 "type":"",
+                 "type":"ImpostorArcade",
                  "visible":true,
-                 "width":1.33529176124966,
-                 "x":3296.83535852584,
-                 "y":1068.23340899987
+                 "width":58.6666666666665,
+                 "x":2944,
+                 "y":1002.66666666667
                 }],
          "opacity":1,
          "type":"objectgroup",
@@ -628,11 +648,11 @@
          "x":0,
          "y":0
         }],
- "nextlayerid":8,
- "nextobjectid":52,
+ "nextlayerid":13,
+ "nextobjectid":55,
  "orientation":"orthogonal",
  "renderorder":"right-down",
- "tiledversion":"1.10.2",
+ "tiledversion":"1.12.2",
  "tileheight":32,
  "tilesets":[
         {
@@ -15859,6 +15879,7 @@
                              "height":28,
                              "id":6,
                              "name":"",
+                             "opacity":1,
                              "rotation":0,
                              "type":"",
                              "visible":true,
@@ -32759,6 +32780,7 @@
                              "height":25.995583882738,
                              "id":1,
                              "name":"",
+                             "opacity":1,
                              "rotation":0,
                              "type":"",
                              "visible":true,
@@ -32790,6 +32812,7 @@
                              "height":25.4474842225598,
                              "id":1,
                              "name":"",
+                             "opacity":1,
                              "rotation":0,
                              "type":"",
                              "visible":true,
@@ -32821,6 +32844,7 @@
                              "height":26.1521837856461,
                              "id":2,
                              "name":"",
+                             "opacity":1,
                              "properties":[
                                     {
                                      "name":"collides",
@@ -32858,6 +32882,7 @@
                              "height":32.3378799505144,
                              "id":1,
                              "name":"",
+                             "opacity":1,
                              "rotation":0,
                              "type":"",
                              "visible":true,
@@ -32898,6 +32923,7 @@
                              "height":31.319980581612,
                              "id":1,
                              "name":"",
+                             "opacity":1,
                              "properties":[
                                     {
                                      "name":"collides",
@@ -32935,6 +32961,7 @@
                              "height":31.5548804359741,
                              "id":1,
                              "name":"",
+                             "opacity":1,
                              "rotation":0,
                              "type":"",
                              "visible":true,
@@ -32975,6 +33002,7 @@
                              "height":31.7897802903362,
                              "id":1,
                              "name":"",
+                             "opacity":1,
                              "rotation":0,
                              "type":"",
                              "visible":true,
@@ -33452,6 +33480,7 @@
                              "height":32.3378799505144,
                              "id":1,
                              "name":"",
+                             "opacity":1,
                              "rotation":0,
                              "type":"",
                              "visible":true,
@@ -33483,6 +33512,7 @@
                              "height":31.8680802417902,
                              "id":1,
                              "name":"",
+                             "opacity":1,
                              "rotation":0,
                              "type":"",
                              "visible":true,
@@ -33514,6 +33544,7 @@
                              "height":18.7136883975132,
                              "id":1,
                              "name":"",
+                             "opacity":1,
                              "rotation":0,
                              "type":"",
                              "visible":true,
@@ -33545,6 +33576,7 @@
                              "height":15.659990290806,
                              "id":1,
                              "name":"",
+                             "opacity":1,
                              "rotation":0,
                              "type":"",
                              "visible":true,
@@ -33576,6 +33608,7 @@
                              "height":15.581690339352,
                              "id":1,
                              "name":"",
+                             "opacity":1,
                              "rotation":0,
                              "type":"",
                              "visible":true,
@@ -33607,6 +33640,7 @@
                              "height":16.1297899995302,
                              "id":1,
                              "name":"",
+                             "opacity":1,
                              "rotation":0,
                              "type":"",
                              "visible":true,
@@ -33638,6 +33672,7 @@
                              "height":22.4720860673066,
                              "id":1,
                              "name":"",
+                             "opacity":1,
                              "rotation":0,
                              "type":"",
                              "visible":true,
@@ -33669,6 +33704,7 @@
                              "height":9.23939427157555,
                              "id":1,
                              "name":"",
+                             "opacity":1,
                              "properties":[
                                     {
                                      "name":"collides",
