@@ -34,6 +34,9 @@ export default abstract class InteractableArea {
   /* An emitter that can be used to broadcast messages to all players in this town */
   private _townEmitter: TownEmitter;
 
+  /* Sends an occupant's playerMoved update; defaults to a town-wide broadcast */
+  private _notifyPlayerMoved: (player: Player) => void;
+
   public get id() {
     return this._id;
   }
@@ -67,6 +70,19 @@ export default abstract class InteractableArea {
     this._width = width;
     this._height = height;
     this._townEmitter = townEmitter;
+    this._notifyPlayerMoved = player =>
+      this._townEmitter.emit('playerMoved', player.toPlayerModel());
+  }
+
+  /**
+   * Replaces how this area announces that an occupant's playerMoved update (their interactableID
+   * changed) must be sent. The Town installs its per-recipient choke point here; without it the
+   * area broadcasts to the whole town, exactly as the starter does.
+   *
+   * @param notify called with the player whose update must be sent
+   */
+  public setPlayerMovedNotifier(notify: (player: Player) => void): void {
+    this._notifyPlayerMoved = notify;
   }
 
   /**
@@ -82,7 +98,7 @@ export default abstract class InteractableArea {
   public add(player: Player): void {
     this._occupants.push(player);
     player.location.interactableID = this.id;
-    this._townEmitter.emit('playerMoved', player.toPlayerModel());
+    this._notifyPlayerMoved(player);
     this._emitAreaChanged();
   }
 
@@ -99,7 +115,7 @@ export default abstract class InteractableArea {
   public remove(player: Player): void {
     this._occupants = this._occupants.filter(eachPlayer => eachPlayer !== player);
     player.location.interactableID = undefined;
-    this._townEmitter.emit('playerMoved', player.toPlayerModel());
+    this._notifyPlayerMoved(player);
     this._emitAreaChanged();
   }
 

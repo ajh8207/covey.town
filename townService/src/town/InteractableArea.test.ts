@@ -64,6 +64,25 @@ describe('InteractableArea', () => {
       expect(lastEmittedMovement.location.interactableID).toBeUndefined();
     });
   });
+  describe('setPlayerMovedNotifier', () => {
+    it('Sends add and remove updates to the notifier instead of broadcasting them', () => {
+      const notify = jest.fn();
+      testArea.setPlayerMovedNotifier(notify);
+      mockClear(townEmitter);
+      testArea.remove(newPlayer);
+      testArea.add(newPlayer);
+      expect(notify).toHaveBeenCalledTimes(2);
+      expect(notify).toHaveBeenNthCalledWith(1, newPlayer);
+      expect(notify).toHaveBeenNthCalledWith(2, newPlayer);
+      expect(() => getLastEmittedEvent(townEmitter, 'playerMoved')).toThrowError();
+    });
+    it('Still broadcasts the area-changed update to the town', () => {
+      testArea.setPlayerMovedNotifier(jest.fn());
+      mockClear(townEmitter);
+      testArea.remove(newPlayer);
+      expect(getLastEmittedEvent(townEmitter, 'interactableUpdate').id).toEqual(id);
+    });
+  });
   describe('isActive', () => {
     it('Returns true when there are players in the area', () => {
       expect(testArea.isActive).toBe(true);

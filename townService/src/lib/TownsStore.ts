@@ -1,6 +1,7 @@
 import { ITiledMap } from '@jonbell/tiled-map-type-guard';
 import * as fs from 'fs/promises';
 import { customAlphabet } from 'nanoid';
+import { debugHidePolicyFromSpec } from '../town/impostor/visibility/DebugHidePolicy';
 import Town from '../town/Town';
 import { TownEmitterFactory } from '../types/CoveyTownSocket';
 
@@ -93,6 +94,13 @@ export default class TownsStore {
     const data = JSON.parse(await fs.readFile(mapFile, 'utf-8'));
     const map = ITiledMap.parse(data);
     newTown.initializeFromMap(map);
+    // 1.B1 spike only: DEBUG_VISIBILITY_HIDE=1:3 hides the 1st player to join from the 3rd
+    const debugPolicy = debugHidePolicyFromSpec(process.env.DEBUG_VISIBILITY_HIDE, () =>
+      newTown.players.map(eachPlayer => eachPlayer.id),
+    );
+    if (debugPolicy) {
+      newTown.setVisibilityPolicy(debugPolicy);
+    }
     this._towns.push(newTown);
     return newTown;
   }

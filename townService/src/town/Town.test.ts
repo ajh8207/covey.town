@@ -14,6 +14,7 @@ import {
 import {
   ChatMessage,
   Interactable,
+  Player as PlayerModel,
   PlayerID,
   PlayerLocation,
   TownEmitter,
@@ -854,6 +855,259 @@ describe('Town', () => {
         expect(player.location.interactableID).toEqual('Name1');
         playerTestData.moveTo(0, 0);
         expect(player.location.interactableID).toBeUndefined();
+      });
+    });
+  });
+  describe('per-recipient playerMoved (visibility choke point)', () => {
+    let alice: MockedPlayer;
+    let bob: MockedPlayer;
+    let carol: MockedPlayer;
+
+    type PositionEvent = 'playerMoved' | 'playerJoined' | 'playerDisconnect';
+
+    /** The `event` payloads about `subjectID` that were sent directly to `viewer`'s socket */
+    function eventsSentTo(
+      viewer: MockedPlayer,
+      event: PositionEvent,
+      subjectID: PlayerID,
+    ): PlayerModel[] {
+      return viewer.socket.emit.mock.calls
+        .filter(eachCall => eachCall[0] === event)
+        .map(eachCall => eachCall[1] as PlayerModel)
+        .filter(eachModel => eachModel.id === subjectID);
+    }
+
+    function movesSentTo(viewer: MockedPlayer, subjectID: PlayerID): PlayerModel[] {
+      return eventsSentTo(viewer, 'playerMoved', subjectID);
+    }
+
+    function idOf(mockedPlayer: MockedPlayer): PlayerID {
+      if (!mockedPlayer.player) {
+        throw new Error('Mocked player was not added to the town');
+      }
+      return mockedPlayer.player.id;
+    }
+
+    beforeEach(async () => {
+      alice = mockPlayer(town.townID);
+      bob = mockPlayer(town.townID);
+      carol = mockPlayer(town.townID);
+      alice.player = await town.addPlayer(alice.userName, alice.socket);
+      bob.player = await town.addPlayer(bob.userName, bob.socket);
+      carol.player = await town.addPlayer(carol.userName, carol.socket);
+      mockReset(townEmitter);
+      for (const eachPlayer of [playerTestData, alice, bob, carol]) {
+        eachPlayer.socket.emit.mockClear();
+      }
+    });
+
+    it('With no policy, broadcasts to the whole town and sends nothing per socket', () => {
+      alice.moveTo(10, 20);
+      const broadcast = getLastEmittedEvent(townEmitter, 'playerMoved');
+      expect(broadcast.id).toEqual(idOf(alice));
+      for (const eachPlayer of [playerTestData, alice, bob, carol]) {
+        expect(movesSentTo(eachPlayer, idOf(alice))).toHaveLength(0);
+      }
+    });
+    describe('With a policy that hides alice from carol', () => {
+      beforeEach(() => {
+        town.setVisibilityPolicy({
+          canSee: (viewerID, subjectID) => !(viewerID === idOf(carol) && subjectID === idOf(alice)),
+        });
+      });
+      it("Sends alice's move to every allowed viewer but not to carol", () => {
+        alice.moveTo(10, 20, 'left', true);
+        expect(movesSentTo(bob, idOf(alice))).toHaveLength(1);
+        expect(movesSentTo(playerTestData, idOf(alice))).toHaveLength(1);
+        expect(movesSentTo(carol, idOf(alice))).toHaveLength(0);
+        expect(movesSentTo(bob, idOf(alice))[0].location).toEqual({
+          x: 10,
+          y: 20,
+          rotation: 'left',
+          moving: true,
+          interactableID: undefined,
+        });
+      });
+      it('Does not also broadcast the move to the town room', () => {
+        alice.moveTo(10, 20);
+        expect(() => getLastEmittedEvent(townEmitter, 'playerMoved')).toThrowError();
+      });
+      it('Still sends alice her own move (the client reads its interactableID from it)', () => {
+        alice.moveTo(10, 20);
+        expect(movesSentTo(alice, idOf(alice))).toHaveLength(1);
+      });
+      it("Still sends other players' moves to carol", () => {
+        bob.moveTo(30, 40);
+        expect(movesSentTo(carol, idOf(bob))).toHaveLength(1);
+      });
+      it('Restores the room broadcast when the policy is removed', () => {
+        town.setVisibilityPolicy(undefined);
+        alice.moveTo(10, 20);
+        expect(getLastEmittedEvent(townEmitter, 'playerMoved').id).toEqual(idOf(alice));
+        expect(movesSentTo(bob, idOf(alice))).toHaveLength(0);
+      });
+    });
+    it('Sends a player their own move even when the policy hides them from everyone', () => {
+      town.setVisibilityPolicy({ canSee: () => false });
+      alice.moveTo(10, 20);
+      expect(movesSentTo(alice, idOf(alice))).toHaveLength(1);
+      expect(movesSentTo(bob, idOf(alice))).toHaveLength(0);
+    });
+    it('Stops sending moves to a player once they disconnect', () => {
+      town.setVisibilityPolicy({ canSee: () => true });
+      getEventListener(bob.socket, 'disconnect')('unknown');
+      bob.socket.emit.mockClear();
+      alice.moveTo(10, 20);
+      expect(movesSentTo(bob, idOf(alice))).toHaveLength(0);
+      expect(movesSentTo(carol, idOf(alice))).toHaveLength(1);
+    });
+
+    describe('interactable area paths (InteractableArea.add / remove)', () => {
+      beforeEach(() => {
+        town.initializeFromMap(testingMaps.twoConvOneViewing);
+        alice.moveTo(45, 122); // Inside of "Name1" area, which is not active yet
+        town.setVisibilityPolicy({
+          canSee: (viewerID, subjectID) => !(viewerID === idOf(carol) && subjectID === idOf(alice)),
+        });
+        for (const eachPlayer of [playerTestData, alice, bob, carol]) {
+          eachPlayer.socket.emit.mockClear();
+        }
+        mockReset(townEmitter);
+      });
+      it('Hides the add() update from carol when the area activates around alice', () => {
+        expect(
+          town.addConversationArea({
+            id: 'Name1',
+            topic: nanoid(),
+            occupants: [],
+            type: 'ConversationArea',
+          }),
+        ).toBe(true);
+        expect(town.getInteractable('Name1').occupantsByID).toEqual([idOf(alice)]);
+        expect(movesSentTo(bob, idOf(alice))).toHaveLength(1);
+        expect(movesSentTo(bob, idOf(alice))[0].location.interactableID).toEqual('Name1');
+        expect(movesSentTo(carol, idOf(alice))).toHaveLength(0);
+        expect(() => getLastEmittedEvent(townEmitter, 'playerMoved')).toThrowError();
+      });
+      it('Hides the remove() update from carol when alice walks out of the area', () => {
+        town.addConversationArea({
+          id: 'Name1',
+          topic: nanoid(),
+          occupants: [],
+          type: 'ConversationArea',
+        });
+        bob.socket.emit.mockClear();
+        alice.moveTo(0, 0);
+        // one update from remove() and one from the move itself
+        expect(movesSentTo(bob, idOf(alice))).toHaveLength(2);
+        expect(movesSentTo(carol, idOf(alice))).toHaveLength(0);
+        expect(() => getLastEmittedEvent(townEmitter, 'playerMoved')).toThrowError();
+      });
+      it('Hides the remove() update from carol when alice disconnects inside the area', () => {
+        town.addConversationArea({
+          id: 'Name1',
+          topic: nanoid(),
+          occupants: [],
+          type: 'ConversationArea',
+        });
+        bob.socket.emit.mockClear();
+        getEventListener(alice.socket, 'disconnect')('unknown');
+        expect(movesSentTo(bob, idOf(alice))).toHaveLength(1);
+        expect(movesSentTo(carol, idOf(alice))).toHaveLength(0);
+      });
+      it('Broadcasts area updates to the whole town when no policy is installed', () => {
+        town.setVisibilityPolicy(undefined);
+        town.addConversationArea({
+          id: 'Name1',
+          topic: nanoid(),
+          occupants: [],
+          type: 'ConversationArea',
+        });
+        expect(getLastEmittedEvent(townEmitter, 'playerMoved').id).toEqual(idOf(alice));
+        expect(movesSentTo(carol, idOf(alice))).toHaveLength(0);
+      });
+    });
+
+    describe('playerJoined path', () => {
+      let dave: MockedPlayer;
+      beforeEach(() => {
+        dave = mockPlayer(town.townID);
+      });
+      it('Broadcasts to the whole town when no policy is installed', async () => {
+        dave.player = await town.addPlayer(dave.userName, dave.socket);
+        expect(getLastEmittedEvent(townEmitter, 'playerJoined').id).toEqual(idOf(dave));
+        for (const eachPlayer of [alice, bob, carol]) {
+          expect(eventsSentTo(eachPlayer, 'playerJoined', idOf(dave))).toHaveLength(0);
+        }
+      });
+      describe('With a policy that hides every newcomer from carol', () => {
+        beforeEach(() => {
+          const known = new Set([playerTestData, alice, bob, carol].map(idOf));
+          town.setVisibilityPolicy({
+            canSee: (viewerID, subjectID) => !(viewerID === idOf(carol) && !known.has(subjectID)),
+          });
+        });
+        it('Does not tell carol about the newcomer, and tells everyone else', async () => {
+          dave.player = await town.addPlayer(dave.userName, dave.socket);
+          expect(eventsSentTo(carol, 'playerJoined', idOf(dave))).toHaveLength(0);
+          expect(eventsSentTo(bob, 'playerJoined', idOf(dave))).toHaveLength(1);
+          expect(eventsSentTo(alice, 'playerJoined', idOf(dave))).toHaveLength(1);
+          expect(() => getLastEmittedEvent(townEmitter, 'playerJoined')).toThrowError();
+        });
+        it('Still tells the newcomer about themself', async () => {
+          dave.player = await town.addPlayer(dave.userName, dave.socket);
+          expect(eventsSentTo(dave, 'playerJoined', idOf(dave))).toHaveLength(1);
+        });
+      });
+    });
+
+    describe('playerDisconnect path (the model carries the last location)', () => {
+      it('Broadcasts to the whole town when no policy is installed', () => {
+        getEventListener(alice.socket, 'disconnect')('unknown');
+        expect(getLastEmittedEvent(townEmitter, 'playerDisconnect').id).toEqual(idOf(alice));
+      });
+      it('Asks the policy about a leaving player while they are still in the player list', () => {
+        const subjectWasListed: boolean[] = [];
+        town.setVisibilityPolicy({
+          canSee: (_viewerID, subjectID) => {
+            subjectWasListed.push(town.players.some(eachPlayer => eachPlayer.id === subjectID));
+            return true;
+          },
+        });
+        getEventListener(alice.socket, 'disconnect')('unknown');
+        expect(subjectWasListed.length).toBeGreaterThan(0);
+        expect(subjectWasListed.every(Boolean)).toBe(true);
+      });
+      it("Does not send alice's last location to carol, who could not see her", () => {
+        town.setVisibilityPolicy({
+          canSee: (viewerID, subjectID) => !(viewerID === idOf(carol) && subjectID === idOf(alice)),
+        });
+        getEventListener(alice.socket, 'disconnect')('unknown');
+        expect(eventsSentTo(carol, 'playerDisconnect', idOf(alice))).toHaveLength(0);
+        expect(eventsSentTo(bob, 'playerDisconnect', idOf(alice))).toHaveLength(1);
+        expect(() => getLastEmittedEvent(townEmitter, 'playerDisconnect')).toThrowError();
+      });
+    });
+
+    describe('getPlayerModelsVisibleTo (the initialize snapshot)', () => {
+      const idsFor = (viewer: MockedPlayer) =>
+        town.getPlayerModelsVisibleTo(idOf(viewer)).map(eachModel => eachModel.id);
+      it('Returns every player when no policy is installed', () => {
+        const everyone = [playerTestData, alice, bob, carol].map(idOf);
+        expect(idsFor(carol)).toEqual(expect.arrayContaining(everyone));
+        expect(idsFor(carol)).toHaveLength(everyone.length);
+      });
+      it('Leaves out players the policy hides from the viewer', () => {
+        town.setVisibilityPolicy({
+          canSee: (viewerID, subjectID) => !(viewerID === idOf(carol) && subjectID === idOf(alice)),
+        });
+        expect(idsFor(carol)).not.toContain(idOf(alice));
+        expect(idsFor(carol)).toContain(idOf(bob));
+        expect(idsFor(bob)).toContain(idOf(alice));
+      });
+      it('Always includes the viewer, because the client finds itself in the list', () => {
+        town.setVisibilityPolicy({ canSee: () => false });
+        expect(idsFor(carol)).toEqual([idOf(carol)]);
       });
     });
   });

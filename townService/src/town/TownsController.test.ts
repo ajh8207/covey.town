@@ -224,6 +224,24 @@ describe('TownsController integration tests', () => {
       await joinAndCheckInitialData(true);
       await joinAndCheckInitialData(false);
     });
+    it('Leaves players the visibility policy hides out of the initial join data', async () => {
+      const townData = await createTownForTesting(undefined, true);
+      const town = TownsStore.getInstance().getTownByID(townData.townID);
+      assert(town);
+      const first = mockPlayer(townData.townID);
+      const second = mockPlayer(townData.townID);
+      await controller.joinTown(first.socket);
+      await controller.joinTown(second.socket);
+      expect(getLastEmittedEvent(second.socket, 'initialize').currentPlayers.length).toBe(2);
+
+      // Anyone who joins from now on may see nobody but themself
+      const alreadyHere = new Set(town.players.map(eachPlayer => eachPlayer.id));
+      town.setVisibilityPolicy({ canSee: viewerID => alreadyHere.has(viewerID) });
+      const late = mockPlayer(townData.townID);
+      await controller.joinTown(late.socket);
+      const lateData = getLastEmittedEvent(late.socket, 'initialize');
+      expect(lateData.currentPlayers.map(eachPlayer => eachPlayer.id)).toEqual([lateData.userID]);
+    });
     it('Includes active conversation areas in the initial join data', async () => {
       const town = await createTownForTesting(undefined, true);
       const player = mockPlayer(town.townID);

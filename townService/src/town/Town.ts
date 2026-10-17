@@ -13,6 +13,8 @@ import {
   Interactable,
   InteractableCommand,
   InteractableCommandBase,
+  Player as PlayerModel,
+  PlayerID,
   PlayerLocation,
   ServerToClientEvents,
   SocketData,
@@ -21,6 +23,7 @@ import {
 import { logError } from '../Utils';
 import ConversationArea from './ConversationArea';
 import GameAreaFactory from './games/GameAreaFactory';
+import VisibilityPolicy from './impostor/visibility/VisibilityPolicy';
 import InteractableArea from './InteractableArea';
 import ViewingArea from './ViewingArea';
 
@@ -93,6 +96,12 @@ export default class Town {
 
   private _connectedSockets: Set<CoveyTownSocket> = new Set();
 
+  /** Each connected player's own socket, so position updates can be sent per recipient */
+  private _socketByPlayer: Map<PlayerID, CoveyTownSocket> = new Map();
+
+  /** Decides who may receive whose position; undefined means broadcast to everyone */
+  private _visibilityPolicy?: VisibilityPolicy;
+
   private _chatMessages: ChatMessage[] = [];
 
   constructor(
@@ -120,12 +129,13 @@ export default class Town {
     this._players.push(newPlayer);
 
     this._connectedSockets.add(socket);
+    this._socketByPlayer.set(newPlayer.id, socket);
 
     // Create a video token for this user to join this town
     newPlayer.videoToken = await this._videoClient.getTokenForTown(this._townID, newPlayer.id);
 
     // Notify other players that this player has joined
-    this._broadcastEmitter.emit('playerJoined', newPlayer.toPlayerModel());
+    this._emitToViewersOf(newPlayer, 'playerJoined', newPlayer.toPlayerModel());
 
     // Register an event listener for the client socket: if the client disconnects,
     // clean up our listener adapter, and then let the CoveyTownController know that the
@@ -223,11 +233,14 @@ export default class Town {
    * @param session PlayerSession to destroy
    */
   private _removePlayer(player: Player): void {
+    this._socketByPlayer.delete(player.id);
     if (player.location.interactableID) {
       this._removePlayerFromInteractable(player);
     }
+    // Announce before dropping the player from the list: a visibility policy may need to look
+    // the leaving player up while deciding who may be told about them.
+    this._emitToViewersOf(player, 'playerDisconnect', player.toPlayerModel());
     this._players = this._players.filter(p => p.id !== player.id);
-    this._broadcastEmitter.emit('playerDisconnect', player.toPlayerModel());
   }
 
   /**
@@ -263,7 +276,83 @@ export default class Town {
 
     player.location = location;
 
-    this._broadcastEmitter.emit('playerMoved', player.toPlayerModel());
+    this._emitPlayerMoved(player);
+  }
+
+  /**
+   * Installs (or, with undefined, removes) the policy that decides which players may receive
+   * which other players' positions. With no policy, positions are broadcast to the whole town.
+   *
+   * @param policy the policy to consult for every position update, or undefined for none
+   */
+  public setVisibilityPolicy(policy: VisibilityPolicy | undefined): void {
+    this._visibilityPolicy = policy;
+  }
+
+  /**
+   * The single choke point for sending a player's position to other clients.
+   *
+   * With no policy installed this is the starter's room broadcast. With a policy installed, the
+   * update goes to each connected player's own socket that the policy allows; the subject always
+   * receives its own update, because the client learns its interactableID from it.
+   *
+   * @param subject the player whose position changed
+   */
+  private _emitPlayerMoved(subject: Player): void {
+    this._emitToViewersOf(subject, 'playerMoved', subject.toPlayerModel());
+  }
+
+  /**
+   * Sends an event that carries a player's model (and so their location) to the town. With no
+   * policy installed this is the starter's room broadcast. With a policy installed, it goes only
+   * to the sockets of players allowed to see the subject, plus the subject's own socket.
+   *
+   * Invariant for 2.B1: a client's player list holds exactly the players it may see.
+   *
+   * @param subject the player the model describes
+   * @param event which event to send
+   * @param model the payload, always the subject's model
+   */
+  private _emitToViewersOf(
+    subject: Player,
+    event: 'playerMoved' | 'playerJoined' | 'playerDisconnect',
+    model: PlayerModel,
+  ): void {
+    if (!this._visibilityPolicy) {
+      this._broadcastEmitter.emit(event, model);
+      return;
+    }
+    for (const [viewerID, socket] of this._socketByPlayer) {
+      if (this._mayReceive(viewerID, subject.id)) {
+        socket.emit(event, model);
+      }
+    }
+  }
+
+  /**
+   * @returns true if the viewer's browser may be told about the subject's position: with no
+   * policy everyone may; with one, the subject always may (the client reads its own
+   * interactableID from its echoed moves) and others only if the policy allows.
+   */
+  private _mayReceive(viewerID: PlayerID, subjectID: PlayerID): boolean {
+    return (
+      !this._visibilityPolicy ||
+      viewerID === subjectID ||
+      this._visibilityPolicy.canSee(viewerID, subjectID)
+    );
+  }
+
+  /**
+   * The players a newly joined (or resyncing) client may be told about, for its `initialize`
+   * snapshot. Always includes the viewer: the client finds itself in this list by its user ID.
+   *
+   * @param viewerID the player whose browser will receive the snapshot
+   * @returns models of every player the viewer may see
+   */
+  public getPlayerModelsVisibleTo(viewerID: PlayerID): PlayerModel[] {
+    return this._players
+      .filter(eachPlayer => this._mayReceive(viewerID, eachPlayer.id))
+      .map(eachPlayer => eachPlayer.toPlayerModel());
   }
 
   /**
@@ -427,6 +516,10 @@ export default class Town {
       .concat(conversationAreas)
       .concat(gameAreas);
     this._validateInteractables();
+    // Areas announce occupants' interactableID changes through the visibility choke point
+    this._interactables.forEach(eachInteractable =>
+      eachInteractable.setPlayerMovedNotifier(player => this._emitPlayerMoved(player)),
+    );
   }
 
   private _validateInteractables() {
