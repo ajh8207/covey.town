@@ -22,7 +22,8 @@ export type InteractableType =
   | 'ViewingArea'
   | 'TicTacToeArea'
   | 'ConnectFourArea'
-  | 'ImpostorArea';
+  | 'ImpostorArea'
+  | 'ImpostorArcade';
 export interface Interactable {
   type: InteractableType;
   id: InteractableID;
@@ -196,11 +197,28 @@ export type ImpostorVote = {
  */
 export interface ImpostorTask {
   /** Unique identifier for the task */
-  taskId: string;
+  taskID: string;
   /** Display name of the task */
   name: string;
   /** Whether the task has been completed */
   completed: boolean;
+}
+
+/**
+ * Reason for a server-forced player repositioning.
+ */
+export type ForceMoveReason = 'MEETING' | 'KILL' | 'SPAWN';
+
+/**
+ * Payload sent by the server to force-move a player.
+ */
+export interface ForceMovePayload {
+  /** Target location coordinates and orientation */
+  location: Partial<PlayerLocation>;
+  /** Sequence number to be acknowledged by the client */
+  seq: number;
+  /** The reason for this forced movement */
+  reason: ForceMoveReason;
 }
 
 /**
@@ -224,8 +242,12 @@ export interface ImpostorGameState extends GameState {
   meetingPhase?: ImpostorMeetingPhase;
   /** PlayerID of the player who triggered the meeting or reported a body */
   meetingCaller?: PlayerID;
-  /** Recorded votes during the voting phase */
+  /** PlayerIDs of players who have cast a vote during the current meeting */
+  hasVoted?: ReadonlyArray<PlayerID>;
+  /** Recorded votes; only populated when meetingPhase === 'RESULTS' */
   votes?: ReadonlyArray<ImpostorVote>;
+  /** The player ejected during the meeting, or 'SKIP' / 'TIE'; only in RESULTS */
+  ejectedPlayer?: PlayerID | 'SKIP' | 'TIE';
   /** Remaining countdown in seconds for discussion or voting */
   meetingTimerSec?: number;
 }
@@ -235,16 +257,18 @@ export interface ImpostorGameState extends GameState {
  * Contains secret role assignment, teammate identities, and private cooldowns.
  */
 export interface ImpostorPrivateState {
+  /** Unique identifier of the game instance this private state belongs to */
+  gameID: GameInstanceID;
   /** Secret role assigned to this player */
   role: ImpostorRole;
   /** PlayerIDs of fellow impostors (only populated if this player is an impostor) */
   impostorTeammates?: ReadonlyArray<PlayerID>;
   /** Task list assigned to this player */
   tasks: ReadonlyArray<ImpostorTask>;
-  /** Kill cooldown remaining in seconds (impostor only) */
-  killCooldown?: number;
-  /** Sabotage cooldown remaining in seconds (impostor only) */
-  sabotageCooldown?: number;
+  /** Epoch timestamp in milliseconds when the kill cooldown expires (impostor only) */
+  killCooldownEndsAt?: number;
+  /** Epoch timestamp in milliseconds when the sabotage cooldown expires (impostor only) */
+  sabotageCooldownEndsAt?: number;
 }
 
 /**
@@ -278,7 +302,7 @@ export interface ImpostorCastVoteMove {
 export interface ImpostorCompleteTaskMove {
   moveType: 'CompleteTask';
   /** Unique identifier of the task being completed */
-  taskId: string;
+  taskID: string;
 }
 
 /**
@@ -435,9 +459,9 @@ export interface ServerToClientEvents {
   /**
    * Forces a player to move to a designated location (e.g. teleporting to emergency meeting
    * table or round spawn point).
-   * @param movementData The target location and orientation for the player.
+   * @param payload Target location, sequence number, and context reason.
    */
-  forceMove: (movementData: PlayerLocation) => void;
+  forceMove: (payload: ForceMovePayload) => void;
   /**
    * Sends private, asymmetric state to an individual player in an Impostor game
    * (e.g. secret role, impostor teammates, private tasks, cooldowns).
@@ -451,4 +475,9 @@ export interface ClientToServerEvents {
   playerMovement: (movementData: PlayerLocation) => void;
   interactableUpdate: (update: Interactable) => void;
   interactableCommand: (command: InteractableCommand & InteractableCommandBase) => void;
+  /**
+   * Acknowledges receipt of a forced repositioning event from the server.
+   * @param seq The sequence number of the forceMove that is being acknowledged.
+   */
+  forceMoveAck: (seq: number) => void;
 }
