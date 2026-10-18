@@ -1,13 +1,38 @@
+// LLM link: https://chatgpt.com/share/6ad40bf8-6d2c-83ea-bf68-7a6772cb09c6
 import Phaser from 'phaser';
+import TownController from '../../classes/TownController';
 
 export default class ImpostorShipScene extends Phaser.Scene {
+  /**
+   * Creates the impostor ship scene with the key `impostorShip`.
+   */
   constructor() {
     super({ key: 'impostorShip' });
   }
 
+  private _townController!: TownController;
+
+  /**
+   * Initializes the scene with the existing town controller.
+   *
+   * @param data - The data passed when launching the scene,
+   * including the town controller instance.
+   */
+  init(data: { townController: TownController }): void {
+    this._townController = data?.townController;
+  }
+
+  /**
+   * Creates the impostor ship scene, including its background,
+   * placeholder rooms, labels, and ESC key handler.
+   *
+   * Pressing ESC stops this scene, unpauses the town controller,
+   * resumes the town and CoveyBoard scenes
+   */
   create(): void {
     this.cameras.main.setBackgroundColor('#30343b');
 
+    /** Creates the graphics for the impostor ship scene (gray placeholder). */
     const graphics = this.add.graphics();
     graphics.fillStyle(0x777777, 1);
 
@@ -25,10 +50,11 @@ export default class ImpostorShipScene extends Phaser.Scene {
       color: '#ffffff',
     });
 
-    this.input.keyboard?.on('keydown-ESC', () => {
-        this.scene.stop('impostorShip');
-        this.scene.resume('coveyBoard');
+    this.input.keyboard?.once('keydown-ESC', () => {
+      this.scene.stop('impostorShip');
+      this._townController.unPause();
+      this.scene.resume('coveyBoard');
+      this.scene.resume('town');
     });
-
   }
 }
