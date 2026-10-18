@@ -35,6 +35,8 @@ import {
 } from '../types/TypeUtils';
 import ConnectFourAreaController from './interactable/ConnectFourAreaController';
 import ConversationAreaController from './interactable/ConversationAreaController';
+import AudioPolicy, { canHear, noAudioPolicy } from './impostor/audio/AudioPolicy';
+import DebugAudioPolicy, { debugAudioEnabled } from './impostor/audio/DebugAudioPolicy';
 import GameAreaController, { GameEventTypes } from './interactable/GameAreaController';
 import InteractableAreaController, {
   BaseInteractableEventMap,
@@ -83,6 +85,12 @@ export type TownEvents = {
    * the new location can be found on the PlayerController.
    */
   playerMoved: (movedPlayer: PlayerController) => void;
+
+  /**
+   * An event that indicates that who can hear whom may have changed for a reason other than
+   * movement, e.g. a player died or a meeting started or ended.
+   */
+  audioPolicyChanged: () => void;
 
   /**
    * An event that indicates that the set of active interactable areas has changed. This event is dispatched
@@ -211,6 +219,12 @@ export default class TownController extends (EventEmitter as new () => TypedEmit
    */
   private _interactableEmitter = new EventEmitter();
 
+  /**
+   * Decides who is a ghost and whether a meeting is in progress, which @see nearbyPlayers uses to
+   * choose whose audio and video to play.
+   */
+  private _audioPolicy: AudioPolicy = noAudioPolicy;
+
   public constructor({ userName, townID, loginController }: ConnectionProperties) {
     super();
     this._townID = townID;
@@ -229,6 +243,26 @@ export default class TownController extends (EventEmitter as new () => TypedEmit
     this._socket = io(url, { auth: { userName, townID } });
     this._townsService = new TownsServiceClient({ BASE: url }).towns;
     this.registerSocketListeners();
+
+    // 1.D1 spike only: NEXT_PUBLIC_DEBUG_AUDIO=true makes "ghost*" usernames ghosts, and
+    // coveyDebugAudio.meeting(true) in the console starts a meeting in this browser
+    if (debugAudioEnabled(process.env.NEXT_PUBLIC_DEBUG_AUDIO)) {
+      const debugPolicy = new DebugAudioPolicy(
+        () => this.players,
+        () => this.emit('audioPolicyChanged'),
+      );
+      this.audioPolicy = debugPolicy;
+      if (typeof window !== 'undefined') {
+        (window as unknown as Record<string, unknown>).coveyDebugAudio = {
+          meeting: (active: boolean) => debugPolicy.setMeeting(active),
+        };
+      }
+    }
+  }
+
+  public set audioPolicy(policy: AudioPolicy) {
+    this._audioPolicy = policy;
+    this.emit('audioPolicyChanged');
   }
 
   public get sessionToken() {
@@ -704,7 +738,8 @@ export default class TownController extends (EventEmitter as new () => TypedEmit
   }
 
   /**
-   * Determine which players are "nearby" -- that they should be included in our video call
+   * Determine which players are "nearby" -- that they should be included in our video call.
+   * The audio policy can exclude ghosts and, during a meeting, include everyone (@see canHear).
    */
   public nearbyPlayers(): PlayerController[] {
     const isNearby = (p: PlayerController) => {
@@ -719,7 +754,7 @@ export default class TownController extends (EventEmitter as new () => TypedEmit
       }
       return false;
     };
-    return this.players.filter(p => isNearby(p));
+    return this.players.filter(p => canHear(this.ourPlayer, p, this._audioPolicy, isNearby));
   }
 
   private _playersByIDs(playerIDs: string[]): PlayerController[] {
@@ -1018,10 +1053,10 @@ export function usePlayersInVideoCall(): PlayerController[] {
   useEffect(() => {
     let lastRecalculatedNearbyPlayers = 0;
     let prevNearbyPlayers: PlayerController[] = [];
-    const updatePlayersInCall = () => {
+    const updatePlayersInCall = (force = false) => {
       const now = Date.now();
       // To reduce re-renders, only recalculate the nearby players every so often
-      if (now - lastRecalculatedNearbyPlayers > CALCULATE_NEARBY_PLAYERS_DELAY_MS) {
+      if (force || now - lastRecalculatedNearbyPlayers > CALCULATE_NEARBY_PLAYERS_DELAY_MS) {
         lastRecalculatedNearbyPlayers = now;
         const nearbyPlayers = townController.nearbyPlayers();
         if (!samePlayers(nearbyPlayers, prevNearbyPlayers)) {
@@ -1030,12 +1065,17 @@ export function usePlayersInVideoCall(): PlayerController[] {
         }
       }
     };
-    townController.addListener('playerMoved', updatePlayersInCall);
-    townController.addListener('playersChanged', updatePlayersInCall);
+    const onMove = () => updatePlayersInCall();
+    // A death or meeting change must never be dropped by the throttle
+    const onAudioPolicyChanged = () => updatePlayersInCall(true);
+    townController.addListener('playerMoved', onMove);
+    townController.addListener('playersChanged', onMove);
+    townController.addListener('audioPolicyChanged', onAudioPolicyChanged);
     updatePlayersInCall();
     return () => {
-      townController.removeListener('playerMoved', updatePlayersInCall);
-      townController.removeListener('playersChanged', updatePlayersInCall);
+      townController.removeListener('playerMoved', onMove);
+      townController.removeListener('playersChanged', onMove);
+      townController.removeListener('audioPolicyChanged', onAudioPolicyChanged);
     };
   }, [townController, setPlayersInCall]);
   return playersInCall;

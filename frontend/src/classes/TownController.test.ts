@@ -153,6 +153,36 @@ describe('TownController', () => {
       //Uses the correct (new) location when emitting that update locally
       expect(expectedPlayerUpdate.location).toEqual(newLocation);
     });
+    describe('nearbyPlayers', () => {
+      const placeAt = (player: PlayerController, x: number) => {
+        player.location = { x, y: 0, rotation: 'front', moving: false };
+      };
+      let others: PlayerController[];
+      beforeEach(() => {
+        others = testController.players.filter(p => p.id !== testController.ourPlayer.id);
+        expect(others.length).toBeGreaterThanOrEqual(2);
+        placeAt(testController.ourPlayer, 0);
+        placeAt(others[0], 10);
+        others.slice(1).forEach(p => placeAt(p, 1000));
+      });
+      it('Uses the proximity rule when no audio policy is installed', () => {
+        const ids = testController.nearbyPlayers().map(p => p.id);
+        expect(ids).toContain(others[0].id);
+        expect(ids).not.toContain(others[1].id);
+      });
+      it('Excludes nearby ghosts and includes far players during a meeting', () => {
+        const listener = jest.fn();
+        testController.addListener('audioPolicyChanged', listener);
+        testController.audioPolicy = {
+          isGhost: id => id === others[0].id,
+          meetingActive: () => true,
+        };
+        expect(listener).toBeCalled();
+        const ids = testController.nearbyPlayers().map(p => p.id);
+        expect(ids).not.toContain(others[0].id);
+        expect(ids).toContain(others[1].id);
+      });
+    });
     it('Emits locally written chat messages to the socket, and dispatches no other events', () => {
       const testMessage: ChatMessage = {
         author: nanoid(),
