@@ -17,7 +17,13 @@ export type TownJoinResponse = {
   interactables: TypedInteractable[];
 }
 
-export type InteractableType = 'ConversationArea' | 'ViewingArea' | 'TicTacToeArea' | 'ConnectFourArea';
+export type InteractableType =
+  | 'ConversationArea'
+  | 'ViewingArea'
+  | 'TicTacToeArea'
+  | 'ConnectFourArea'
+  | 'ImpostorArea'
+  | 'ImpostorArcade';
 export interface Interactable {
   type: InteractableType;
   id: InteractableID;
@@ -161,6 +167,173 @@ export type ConnectFourColIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 export type ConnectFourColor = 'Red' | 'Yellow';
 
+/**
+ * Role assigned to a player in an Impostor game
+ */
+export type ImpostorRole = 'Crewmate' | 'Impostor';
+
+/**
+ * Winning team in an Impostor game
+ */
+export type ImpostorTeam = 'Crewmates' | 'Impostors';
+
+/**
+ * Phase of an emergency meeting or body report discussion
+ */
+export type ImpostorMeetingPhase = 'DISCUSSION' | 'VOTING' | 'RESULTS';
+
+/**
+ * Individual player vote during an emergency meeting.
+ */
+export type ImpostorVote = {
+  /** PlayerID of the player who cast the vote */
+  voter: PlayerID;
+  /** Target PlayerID being voted for, or 'SKIP' */
+  target: PlayerID | 'SKIP';
+};
+
+/**
+ * Representation of an individual task assigned in the game.
+ */
+export interface ImpostorTask {
+  /** Unique identifier for the task */
+  taskID: string;
+  /** Display name of the task */
+  name: string;
+  /** Whether the task has been completed */
+  completed: boolean;
+}
+
+/**
+ * Reason for a server-forced player repositioning.
+ */
+export type ForceMoveReason = 'MEETING' | 'KILL' | 'SPAWN';
+
+/**
+ * Payload sent by the server to force-move a player.
+ */
+export interface ForceMovePayload {
+  /** Target location coordinates and orientation */
+  location: Partial<PlayerLocation>;
+  /** Sequence number to be acknowledged by the client */
+  seq: number;
+  /** The reason for this forced movement */
+  reason: ForceMoveReason;
+}
+
+/**
+ * Public state of an Impostor game visible to all players in the game area.
+ * Secret information (such as who the impostors are) is omitted from this state.
+ */
+export interface ImpostorGameState extends GameState {
+  /** Winning team if the game is over */
+  winner?: ImpostorTeam;
+  /** PlayerIDs of players who are still alive */
+  alivePlayers: ReadonlyArray<PlayerID>;
+  /** PlayerIDs of players who have died or become ghosts */
+  deadPlayers: ReadonlyArray<PlayerID>;
+  /** Total number of tasks completed across all crewmates */
+  tasksCompleted: number;
+  /** Total number of tasks required to achieve a task victory */
+  totalTasks: number;
+  /** Whether an emergency meeting or body report is currently active */
+  isMeetingActive: boolean;
+  /** Current phase of the active emergency meeting */
+  meetingPhase?: ImpostorMeetingPhase;
+  /** PlayerID of the player who triggered the meeting or reported a body */
+  meetingCaller?: PlayerID;
+  /** PlayerIDs of players who have cast a vote during the current meeting */
+  hasVoted?: ReadonlyArray<PlayerID>;
+  /** Recorded votes; only populated when meetingPhase === 'RESULTS' */
+  votes?: ReadonlyArray<ImpostorVote>;
+  /** The player ejected during the meeting, or 'SKIP' / 'TIE'; only in RESULTS */
+  ejectedPlayer?: PlayerID | 'SKIP' | 'TIE';
+  /** Remaining countdown in seconds for discussion or voting */
+  meetingTimerSec?: number;
+}
+
+/**
+ * Private state of an Impostor game sent only to an individual player.
+ * Contains secret role assignment, teammate identities, and private cooldowns.
+ */
+export interface ImpostorPrivateState {
+  /** Unique identifier of the game instance this private state belongs to */
+  gameID: GameInstanceID;
+  /** Secret role assigned to this player */
+  role: ImpostorRole;
+  /** PlayerIDs of fellow impostors (only populated if this player is an impostor) */
+  impostorTeammates?: ReadonlyArray<PlayerID>;
+  /** Task list assigned to this player */
+  tasks: ReadonlyArray<ImpostorTask>;
+  /** Epoch timestamp in milliseconds when the kill cooldown expires (impostor only) */
+  killCooldownEndsAt?: number;
+  /** Epoch timestamp in milliseconds when the sabotage cooldown expires (impostor only) */
+  sabotageCooldownEndsAt?: number;
+}
+
+/**
+ * Move to initiate an emergency meeting.
+ */
+export interface ImpostorCallMeetingMove {
+  moveType: 'CallMeeting';
+}
+
+/**
+ * Move to report a discovered dead body.
+ */
+export interface ImpostorReportBodyMove {
+  moveType: 'ReportBody';
+  /** PlayerID of the discovered dead player */
+  victimID: PlayerID;
+}
+
+/**
+ * Move to cast a vote during an active emergency meeting.
+ */
+export interface ImpostorCastVoteMove {
+  moveType: 'CastVote';
+  /** The player being voted against, or 'SKIP' to skip voting */
+  target: PlayerID | 'SKIP';
+}
+
+/**
+ * Move to complete a crewmate task.
+ */
+export interface ImpostorCompleteTaskMove {
+  moveType: 'CompleteTask';
+  /** Unique identifier of the task being completed */
+  taskID: string;
+}
+
+/**
+ * Move to execute an impostor kill on a crewmate.
+ */
+export interface ImpostorKillPlayerMove {
+  moveType: 'KillPlayer';
+  /** PlayerID of the victim being eliminated */
+  victimID: PlayerID;
+}
+
+/**
+ * Move to trigger an impostor sabotage.
+ */
+export interface ImpostorSabotageMove {
+  moveType: 'Sabotage';
+  /** Identifier or name of the sabotage action */
+  sabotageType: string;
+}
+
+/**
+ * Actions that can be performed in an Impostor game
+ */
+export type ImpostorMove =
+  | ImpostorCallMeetingMove
+  | ImpostorReportBodyMove
+  | ImpostorCastVoteMove
+  | ImpostorCompleteTaskMove
+  | ImpostorKillPlayerMove
+  | ImpostorSabotageMove;
+
 export type InteractableID = string;
 export type GameInstanceID = string;
 
@@ -194,6 +367,12 @@ export interface GameArea<T extends GameState> extends Interactable {
   history: GameResult[];
 }
 
+/**
+ * Base type for an area that can host an Impostor game
+ * @see GameArea
+ */
+export type ImpostorArea = GameArea<ImpostorGameState>;
+
 export type CommandID = string;
 
 /**
@@ -216,7 +395,14 @@ interface InteractableCommandBase {
   type: string;
 }
 
-export type InteractableCommand =  ViewingAreaUpdateCommand | JoinGameCommand | GameMoveCommand<TicTacToeMove> | GameMoveCommand<ConnectFourMove> | StartGameCommand | LeaveGameCommand;
+export type InteractableCommand =
+  | ViewingAreaUpdateCommand
+  | JoinGameCommand
+  | GameMoveCommand<TicTacToeMove>
+  | GameMoveCommand<ConnectFourMove>
+  | ImpostorCommand
+  | StartGameCommand
+  | LeaveGameCommand;
 export interface ViewingAreaUpdateCommand  {
   type: 'ViewingAreaUpdate';
   update: ViewingArea;
@@ -237,10 +423,19 @@ export interface GameMoveCommand<MoveType> {
   gameID: GameInstanceID;
   move: MoveType;
 }
+/**
+ * Command to execute an in-game move in an Impostor game
+ */
+export interface ImpostorCommand {
+  type: 'ImpostorCommand';
+  gameID: GameInstanceID;
+  move: ImpostorMove;
+}
 export type InteractableCommandReturnType<CommandType extends InteractableCommand> = 
   CommandType extends JoinGameCommand ? { gameID: string}:
   CommandType extends ViewingAreaUpdateCommand ? undefined :
   CommandType extends GameMoveCommand<TicTacToeMove> ? undefined :
+  CommandType extends ImpostorCommand ? undefined :
   CommandType extends LeaveGameCommand ? undefined :
   never;
 
@@ -261,6 +456,18 @@ export interface ServerToClientEvents {
   chatMessage: (message: ChatMessage) => void;
   interactableUpdate: (interactable: Interactable) => void;
   commandResponse: (response: InteractableCommandResponse) => void;
+  /**
+   * Forces a player to move to a designated location (e.g. teleporting to emergency meeting
+   * table or round spawn point).
+   * @param payload Target location, sequence number, and context reason.
+   */
+  forceMove: (payload: ForceMovePayload) => void;
+  /**
+   * Sends private, asymmetric state to an individual player in an Impostor game
+   * (e.g. secret role, impostor teammates, private tasks, cooldowns).
+   * @param privateState The private state payload for the recipient player.
+   */
+  impostorPrivateUpdate: (privateState: ImpostorPrivateState) => void;
 }
 
 export interface ClientToServerEvents {
@@ -268,4 +475,9 @@ export interface ClientToServerEvents {
   playerMovement: (movementData: PlayerLocation) => void;
   interactableUpdate: (update: Interactable) => void;
   interactableCommand: (command: InteractableCommand & InteractableCommandBase) => void;
+  /**
+   * Acknowledges receipt of a forced repositioning event from the server.
+   * @param seq The sequence number of the forceMove that is being acknowledged.
+   */
+  forceMoveAck: (seq: number) => void;
 }
