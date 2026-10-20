@@ -1,5 +1,6 @@
 import assert from 'assert';
 import Phaser from 'phaser';
+import ImpostorArcade from './interactables/ImpostorArcade/ImpostorArcade';
 import PlayerController, { MOVEMENT_SPEED } from '../../classes/PlayerController';
 import TownController from '../../classes/TownController';
 import { PlayerLocation } from '../../types/CoveyTownSocket';
@@ -21,6 +22,8 @@ function interactableTypeForObjectType(type: string): any {
     return ViewingArea;
   } else if (type === 'GameArea') {
     return GameArea;
+  } else if (type === 'ImpostorArcade') {
+    return ImpostorArcade;
   } else {
     throw new Error(`Unknown object type: ${type}`);
   }

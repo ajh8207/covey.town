@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import useTownController from '../../hooks/useTownController';
 import SocialSidebar from '../SocialSidebar/SocialSidebar';
 import NewConversationModal from './interactables/NewCoversationModal';
+import ImpostorShipScene from './ImpostorShipScene';
 import TownGameScene from './TownGameScene';
 import GameAreaWrapper from './interactables/GamesArea';
 import useChatContext from '../VideoCall/VideoFrontend/hooks/useChatContext/useChatContext';
@@ -70,6 +71,7 @@ export default function TownMap(): JSX.Element {
     const game = new Phaser.Game(config);
     const newGameScene = new TownGameScene(coveyTownController);
     game.scene.add('coveyBoard', newGameScene, true);
+    game.scene.add('impostorShip', ImpostorShipScene, false);
     const pauseListener = newGameScene.pause.bind(newGameScene);
     const unPauseListener = newGameScene.resume.bind(newGameScene);
     coveyTownController.addListener('pause', pauseListener);
