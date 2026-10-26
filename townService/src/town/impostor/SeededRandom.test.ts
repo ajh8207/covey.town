@@ -33,6 +33,18 @@ describe('SeededRandom', () => {
       }
     });
 
+    it('throws if numeric seed is NaN or Infinity', () => {
+      expect(() => createSeededRandom(NaN)).toThrow(
+        'Invalid seed: NaN. Seed must be a finite number or a string.',
+      );
+      expect(() => createSeededRandom(Infinity)).toThrow(
+        'Invalid seed: Infinity. Seed must be a finite number or a string.',
+      );
+      expect(() => createSeededRandom(-Infinity)).toThrow(
+        'Invalid seed: -Infinity. Seed must be a finite number or a string.',
+      );
+    });
+
     it('produces the exact same sequence for identical numeric seeds', () => {
       const rng1 = createSeededRandom(12345);
       const rng2 = createSeededRandom(12345);
@@ -63,6 +75,16 @@ describe('SeededRandom', () => {
       expect(seq1).not.toEqual(seq2);
     });
 
+    it('produces varied initial outputs for small sequential seeds', () => {
+      const out1 = createSeededRandom(1)();
+      const out2 = createSeededRandom(2)();
+      const out3 = createSeededRandom(3)();
+
+      // Ensure warm-up loop eliminated initial correlation (outputs are well spread)
+      expect(Math.abs(out1 - out2)).toBeGreaterThan(0.01);
+      expect(Math.abs(out2 - out3)).toBeGreaterThan(0.01);
+    });
+
     it('handles seed value 0 gracefully', () => {
       const rng = createSeededRandom(0);
       const val = rng();
@@ -84,7 +106,13 @@ describe('SeededRandom', () => {
     });
 
     it('throws if min > max', () => {
-      expect(() => randomInt(10, 5)).toThrow('min (10) cannot be greater than max (5)');
+      expect(() => randomInt(10, 5)).toThrow('min (10) rounded up exceeds max (5) rounded down');
+    });
+
+    it('throws if rounded bounds invert (e.g. 1.2 to 1.8)', () => {
+      expect(() => randomInt(1.2, 1.8)).toThrow(
+        'min (1.2) rounded up exceeds max (1.8) rounded down',
+      );
     });
 
     it('returns min when min === max', () => {
@@ -110,11 +138,11 @@ describe('SeededRandom', () => {
       expect(original).toEqual(copy);
     });
 
-    it('contains the exact same elements in the shuffled output', () => {
+    it('contains the exact same elements in the shuffled output without mutating input', () => {
       const original = [1, 2, 3, 4, 5, 6, 7];
       const shuffled = shuffle(original, createSeededRandom(77));
       expect(shuffled).toHaveLength(original.length);
-      expect(shuffled.sort()).toEqual(original.sort());
+      expect([...shuffled].sort()).toEqual([...original].sort());
     });
 
     it('produces the exact same permutation with identical seeds', () => {

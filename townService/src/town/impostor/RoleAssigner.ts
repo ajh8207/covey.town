@@ -13,9 +13,9 @@ export interface RoleAssignment {
   /** Map of each player's ID to their assigned role */
   roles: Map<PlayerID, ImpostorRole>;
   /** PlayerIDs of all players assigned as Impostors */
-  impostors: PlayerID[];
+  impostors: ReadonlyArray<PlayerID>;
   /** PlayerIDs of all players assigned as Crewmates */
-  crewmates: PlayerID[];
+  crewmates: ReadonlyArray<PlayerID>;
   /**
    * Returns the fellow impostor teammates for a given player.
    * If the player is an Impostor, returns the IDs of the other Impostors.
@@ -73,10 +73,10 @@ export function assignRoles(
 
   let impostorCount: number;
   if (options?.impostorCount !== undefined) {
-    if (options.impostorCount < 1) {
-      throw new Error(`impostorCount must be at least 1, got ${options.impostorCount}`);
+    if (!Number.isInteger(options.impostorCount) || options.impostorCount < 1) {
+      throw new Error(`impostorCount must be a positive integer, got ${options.impostorCount}`);
     }
-    if (options.impostorCount >= Math.floor(playerIDs.length / 2)) {
+    if (options.impostorCount * 2 >= playerIDs.length) {
       throw new Error(
         `impostorCount (${options.impostorCount}) must be strictly less than half the ` +
           `player count (${playerIDs.length})`,
@@ -84,7 +84,7 @@ export function assignRoles(
     }
     impostorCount = options.impostorCount;
   } else {
-    impostorCount = impostorCountForPlayerCount(playerIDs.length);
+    impostorCount = impostorCountForPlayerCount(playerIDs.length, options?.settings);
   }
 
   const rng =

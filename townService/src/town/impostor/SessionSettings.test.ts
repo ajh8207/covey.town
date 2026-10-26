@@ -39,6 +39,30 @@ describe('SessionSettings', () => {
       expect(settings.minPlayers).toBe(defaultSessionSettings.minPlayers);
       expect(settings.votingDurationSec).toBe(defaultSessionSettings.votingDurationSec);
     });
+
+    it('throws if minPlayers is less than 4', () => {
+      expect(() => createSessionSettings({ minPlayers: 3 })).toThrow(
+        'minPlayers (3) cannot be less than 4',
+      );
+    });
+
+    it('throws if minPlayers is greater than maxPlayers', () => {
+      expect(() => createSessionSettings({ minPlayers: 8, maxPlayers: 6 })).toThrow(
+        'minPlayers (8) cannot be greater than maxPlayers (6)',
+      );
+    });
+
+    it('throws if any cooldown, duration, or count is negative', () => {
+      expect(() => createSessionSettings({ killCooldownSec: -1 })).toThrow(
+        'cooldowns, durations, and counts cannot be negative',
+      );
+      expect(() => createSessionSettings({ discussionDurationSec: -5 })).toThrow(
+        'cooldowns, durations, and counts cannot be negative',
+      );
+      expect(() => createSessionSettings({ tasksPerCrewmate: -2 })).toThrow(
+        'cooldowns, durations, and counts cannot be negative',
+      );
+    });
   });
 
   describe('impostorCountForPlayerCount', () => {
@@ -65,6 +89,15 @@ describe('SessionSettings', () => {
       expect(impostorCountForPlayerCount(8)).toBe(2);
       expect(impostorCountForPlayerCount(9)).toBe(2);
       expect(impostorCountForPlayerCount(10)).toBe(2);
+    });
+
+    it('respects custom settings boundaries', () => {
+      const custom = createSessionSettings({ minPlayers: 5, maxPlayers: 12 });
+      expect(() => impostorCountForPlayerCount(4, custom)).toThrow('minimum 5 players required');
+      expect(impostorCountForPlayerCount(5, custom)).toBe(1);
+      expect(impostorCountForPlayerCount(11, custom)).toBe(2);
+      expect(impostorCountForPlayerCount(12, custom)).toBe(2);
+      expect(() => impostorCountForPlayerCount(13, custom)).toThrow('maximum 12 players allowed');
     });
   });
 });

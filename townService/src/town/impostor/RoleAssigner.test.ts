@@ -28,9 +28,12 @@ describe('RoleAssigner', () => {
       );
     });
 
-    it('throws if custom impostorCount is less than 1', () => {
+    it('throws if custom impostorCount is less than 1 or not an integer', () => {
       expect(() => assignRoles(createPlayerIDs(6), { impostorCount: 0 })).toThrow(
-        'impostorCount must be at least 1, got 0',
+        'impostorCount must be a positive integer, got 0',
+      );
+      expect(() => assignRoles(createPlayerIDs(6), { impostorCount: 1.5 })).toThrow(
+        'impostorCount must be a positive integer, got 1.5',
       );
     });
 
@@ -41,6 +44,13 @@ describe('RoleAssigner', () => {
       expect(() => assignRoles(createPlayerIDs(5), { impostorCount: 3 })).toThrow(
         'impostorCount (3) must be strictly less than half the player count (5)',
       );
+    });
+
+    it('allows 2 impostors with 5 players (2 * 2 < 5)', () => {
+      const players = createPlayerIDs(5);
+      const result = assignRoles(players, { impostorCount: 2, seed: 123 });
+      expect(result.impostors).toHaveLength(2);
+      expect(result.crewmates).toHaveLength(3);
     });
   });
 
@@ -164,6 +174,17 @@ describe('RoleAssigner', () => {
 
       const validResult = assignRoles(createPlayerIDs(6), { settings: customSettings });
       expect(validResult.roles.size).toBe(6);
+    });
+
+    it('respects custom maxPlayers > 10 and computes impostor count without throwing', () => {
+      const customSettings = createSessionSettings({
+        minPlayers: 4,
+        maxPlayers: 12,
+      });
+
+      const result = assignRoles(createPlayerIDs(11), { settings: customSettings });
+      expect(result.impostors).toHaveLength(2);
+      expect(result.crewmates).toHaveLength(9);
     });
 
     it('RoleAssigner.assign static method matches assignRoles function', () => {

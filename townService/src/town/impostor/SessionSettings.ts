@@ -42,23 +42,26 @@ export const defaultSessionSettings: Readonly<SessionSettings> = Object.freeze({
  *
  * Rules:
  * - 4 to 6 players: 1 Impostor
- * - 7 to 8 players: 2 Impostors
- * - 9 to 10 players: 2 Impostors
+ * - 7 to 10 players: 2 Impostors
  *
  * @param playerCount Number of participating players
- * @throws Error if playerCount < minPlayers (4) or playerCount > maxPlayers (10)
+ * @param settings Optional SessionSettings to use for min and max player boundaries
+ * @throws Error if playerCount < settings.minPlayers or playerCount > settings.maxPlayers
  */
-export function impostorCountForPlayerCount(playerCount: number): number {
-  if (playerCount < defaultSessionSettings.minPlayers) {
+export function impostorCountForPlayerCount(
+  playerCount: number,
+  settings: SessionSettings = defaultSessionSettings,
+): number {
+  if (playerCount < settings.minPlayers) {
     throw new Error(
       `Cannot start Impostor game: minimum ` +
-        `${defaultSessionSettings.minPlayers} players required, got ${playerCount}`,
+        `${settings.minPlayers} players required, got ${playerCount}`,
     );
   }
-  if (playerCount > defaultSessionSettings.maxPlayers) {
+  if (playerCount > settings.maxPlayers) {
     throw new Error(
       `Cannot start Impostor game: maximum ` +
-        `${defaultSessionSettings.maxPlayers} players allowed, got ${playerCount}`,
+        `${settings.maxPlayers} players allowed, got ${playerCount}`,
     );
   }
   if (playerCount <= 6) {
@@ -72,10 +75,34 @@ export function impostorCountForPlayerCount(playerCount: number): number {
  *
  * @param overrides Partial settings to override default values
  * @returns Complete SessionSettings object
+ * @throws Error if minPlayers < 4, minPlayers > maxPlayers, or any duration/count is negative
  */
 export function createSessionSettings(overrides?: Partial<SessionSettings>): SessionSettings {
-  return {
+  const merged = {
     ...defaultSessionSettings,
     ...overrides,
   };
+
+  if (merged.minPlayers < 4) {
+    throw new Error(`Invalid settings: minPlayers (${merged.minPlayers}) cannot be less than 4`);
+  }
+  if (merged.minPlayers > merged.maxPlayers) {
+    throw new Error(
+      `Invalid settings: minPlayers (${merged.minPlayers}) cannot be greater than ` +
+        `maxPlayers (${merged.maxPlayers})`,
+    );
+  }
+  if (
+    merged.killCooldownSec < 0 ||
+    merged.sabotageCooldownSec < 0 ||
+    merged.discussionDurationSec < 0 ||
+    merged.votingDurationSec < 0 ||
+    merged.resultsDurationSec < 0 ||
+    merged.emergencyMeetingsPerPlayer < 0 ||
+    merged.tasksPerCrewmate < 0
+  ) {
+    throw new Error('Invalid settings: cooldowns, durations, and counts cannot be negative');
+  }
+
+  return merged;
 }

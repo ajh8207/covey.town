@@ -24,8 +24,13 @@ export function hashStringSeed(str: string): number {
  *
  * @param seed A number or string used to initialize the generator
  * @returns A function that returns pseudo-random floats in the half-open interval [0, 1)
+ * @throws Error if numeric seed is NaN or Infinity
  */
 export function createSeededRandom(seed: number | string): () => number {
+  if (typeof seed === 'number' && !Number.isFinite(seed)) {
+    throw new Error(`Invalid seed: ${seed}. Seed must be a finite number or a string.`);
+  }
+
   const m = 2147483647;
   const a = 16807;
 
@@ -33,6 +38,11 @@ export function createSeededRandom(seed: number | string): () => number {
 
   if (state === 0) {
     state = 12345;
+  }
+
+  // Discard initial iterations to eliminate low-value output correlation for small sequential seeds
+  for (let i = 0; i < 5; i += 1) {
+    state = (state * a) % m;
   }
 
   return function nextRandom(): number {
@@ -50,11 +60,11 @@ export function createSeededRandom(seed: number | string): () => number {
  * @returns Random integer between min and max inclusive
  */
 export function randomInt(min: number, max: number, rng: () => number = Math.random): number {
-  if (min > max) {
-    throw new Error(`min (${min}) cannot be greater than max (${max})`);
-  }
   const floorMin = Math.ceil(min);
   const floorMax = Math.floor(max);
+  if (floorMin > floorMax) {
+    throw new Error(`min (${min}) rounded up exceeds max (${max}) rounded down`);
+  }
   return Math.floor(rng() * (floorMax - floorMin + 1)) + floorMin;
 }
 
