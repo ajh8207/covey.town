@@ -21,6 +21,9 @@ import {
   ViewingArea as ViewingAreaModel,
 } from '../types/CoveyTownSocket';
 import ConversationArea from './ConversationArea';
+import SessionVisibilityPolicy, {
+  VisibilityClass,
+} from './impostor/visibility/SessionVisibilityPolicy';
 import Town from './Town';
 
 const mockTwilioVideo = mockDeep<TwilioVideo>();
@@ -1108,6 +1111,94 @@ describe('Town', () => {
       it('Always includes the viewer, because the client finds itself in the list', () => {
         town.setVisibilityPolicy({ canSee: () => false });
         expect(idsFor(carol)).toEqual([idOf(carol)]);
+      });
+    });
+
+    // AI assistance: written with Claude Code, prompted by Kush; see the PR discussion.
+    describe('With the session policy installed', () => {
+      // Covers the events that carry a player model. Area updates (interactableUpdate) still
+      // list occupants by ID; that leak is closed in 2.B1b.
+      const classByPlayer = new Map<PlayerID, VisibilityClass>();
+      let dave: MockedPlayer;
+
+      /** Names of the position, join and disconnect events about `subject` sent to `viewer` */
+      function eventsAbout(viewer: MockedPlayer, subject: MockedPlayer): string[] {
+        return (['playerMoved', 'playerJoined', 'playerDisconnect'] as PositionEvent[]).flatMap(
+          eachEvent => eventsSentTo(viewer, eachEvent, idOf(subject)).map(() => eachEvent),
+        );
+      }
+
+      /** A sorted copy, so a check compares counts per event and ignores their order */
+      const sorted = (events: string[]) => [...events].sort();
+
+      beforeEach(async () => {
+        town.initializeFromMap(testingMaps.twoConvOneViewing);
+        classByPlayer.clear();
+        classByPlayer.set(idOf(playerTestData), 'alive');
+        classByPlayer.set(idOf(bob), 'alive');
+        classByPlayer.set(idOf(alice), 'ghost');
+        classByPlayer.set(idOf(carol), 'ghost');
+        // A player who joins during the game is a spectator (design doc §15.8)
+        town.setVisibilityPolicy(
+          new SessionVisibilityPolicy({
+            visibilityClassOf: classifiedID => classByPlayer.get(classifiedID) ?? 'spectator',
+          }),
+        );
+        for (const eachPlayer of [playerTestData, alice, bob, carol]) {
+          eachPlayer.socket.emit.mockClear();
+        }
+        mockReset(townEmitter);
+
+        // Every path that carries a player model, run by ghosts and a spectator
+        alice.moveTo(10, 20); // Town._updatePlayerLocation
+        alice.moveTo(45, 122); // into the "Name1" area, which is not active yet
+        town.addConversationArea({
+          id: 'Name1',
+          topic: nanoid(),
+          occupants: [],
+          type: 'ConversationArea',
+        }); // InteractableArea.add for alice
+        carol.moveTo(45, 122); // InteractableArea.add for carol, while the area is active
+        alice.moveTo(0, 0); // InteractableArea.remove
+        getEventListener(carol.socket, 'disconnect')('unknown'); // remove + playerDisconnect
+        dave = mockPlayer(town.townID);
+        dave.player = await town.addPlayer(dave.userName, dave.socket); // playerJoined
+        dave.moveTo(5, 5);
+        playerTestData.moveTo(7, 7); // a living player, as a control
+      });
+
+      it('Sends no position, join or disconnect events for a ghost on any path', () => {
+        for (const eachLiving of [playerTestData, bob]) {
+          expect(eventsAbout(eachLiving, alice)).toEqual([]);
+          expect(eventsAbout(eachLiving, carol)).toEqual([]);
+        }
+        expect(() => getLastEmittedEvent(townEmitter, 'playerMoved')).toThrowError();
+        expect(() => getLastEmittedEvent(townEmitter, 'playerJoined')).toThrowError();
+        expect(() => getLastEmittedEvent(townEmitter, 'playerDisconnect')).toThrowError();
+      });
+      it('Sends no position or join events for a spectator who joined mid-game', () => {
+        expect(eventsAbout(playerTestData, dave)).toEqual([]);
+        expect(eventsAbout(bob, dave)).toEqual([]);
+      });
+      it('Sends ghosts every one of those events (so every path above really ran)', () => {
+        expect(sorted(eventsAbout(carol, alice))).toEqual(
+          sorted(['playerMoved', 'playerMoved', 'playerMoved', 'playerMoved', 'playerMoved']),
+        );
+        expect(sorted(eventsAbout(alice, carol))).toEqual(
+          sorted(['playerMoved', 'playerMoved', 'playerMoved', 'playerDisconnect']),
+        );
+        expect(sorted(eventsAbout(alice, dave))).toEqual(sorted(['playerJoined', 'playerMoved']));
+      });
+      it('Still sends living players to everyone', () => {
+        for (const eachViewer of [alice, bob, dave]) {
+          expect(eventsAbout(eachViewer, playerTestData)).toEqual(['playerMoved']);
+        }
+      });
+      it("Leaves ghosts and spectators out of a living player's initialize snapshot", () => {
+        const snapshotIDs = town.getPlayerModelsVisibleTo(idOf(bob)).map(eachModel => eachModel.id);
+        expect(snapshotIDs).toEqual(expect.arrayContaining([idOf(bob), idOf(playerTestData)]));
+        expect(snapshotIDs).toHaveLength(2);
+        expect(town.getPlayerModelsVisibleTo(idOf(alice))).toHaveLength(4);
       });
     });
   });
