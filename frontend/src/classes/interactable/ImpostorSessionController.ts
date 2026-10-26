@@ -53,9 +53,14 @@ export default class ImpostorSessionController extends GameAreaController<
    * Listener callback for private state updates from TownController.
    */
   private _onPrivateUpdate = (privateState: ImpostorPrivateState): void => {
-    if (this._instanceID && privateState.gameID !== this._instanceID) {
+    if (
+      this.status === 'IN_PROGRESS' &&
+      this._instanceID &&
+      privateState.gameID !== this._instanceID
+    ) {
       return;
     }
+    this._instanceID = privateState.gameID;
     const oldRole = this._privateState?.role;
     const oldTasks = this._privateState?.tasks;
     const oldKill = this._privateState?.killCooldownEndsAt;
@@ -97,6 +102,10 @@ export default class ImpostorSessionController extends GameAreaController<
 
   /**
    * Cleans up event listeners on TownController.
+   *
+   * Note: Interactable controllers live for the lifetime of the TownController session,
+   * so this method is primarily intended for explicit teardown, lifecycle symmetry,
+   * and unit test isolation.
    */
   public destroy(): void {
     this._townController.removeListener('impostorPrivateUpdate', this._onPrivateUpdate);

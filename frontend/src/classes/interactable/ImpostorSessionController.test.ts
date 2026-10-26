@@ -320,8 +320,11 @@ describe('ImpostorSessionController', () => {
       expect(controller.privateState).toEqual(privateUpdate);
     });
 
-    it('Ignores private update with mismatched gameID', () => {
-      const controller = impostorControllerWithProps({ gameInstanceID: 'game-A' });
+    it('Ignores private update with mismatched gameID when game is in progress', () => {
+      const controller = impostorControllerWithProps({
+        gameInstanceID: 'game-A',
+        status: 'IN_PROGRESS',
+      });
       const roleSpy = jest.fn();
       controller.addListener('roleChanged', roleSpy);
 
@@ -333,6 +336,24 @@ describe('ImpostorSessionController', () => {
 
       expect(roleSpy).not.toHaveBeenCalled();
       expect(controller.myRole).toBeUndefined();
+    });
+
+    it('Accepts private update with new gameID when no game is in progress', () => {
+      const controller = impostorControllerWithProps({
+        gameInstanceID: 'game-A',
+        status: 'WAITING_TO_START',
+      });
+      const roleSpy = jest.fn();
+      controller.addListener('roleChanged', roleSpy);
+
+      emitTownControllerEvent('impostorPrivateUpdate', {
+        gameID: 'game-B',
+        role: 'Crewmate',
+        tasks: [],
+      });
+
+      expect(roleSpy).toHaveBeenCalledWith('Crewmate');
+      expect(controller.myRole).toBe('Crewmate');
     });
 
     it('Does not emit roleChanged or tasksChanged if values are unchanged', () => {
