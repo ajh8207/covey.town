@@ -17,6 +17,7 @@ import {
   ChatMessage,
   CoveyTownSocket,
   GameState,
+  ImpostorPrivateState,
   Interactable as InteractableAreaModel,
   InteractableCommand,
   InteractableCommandBase,
@@ -30,6 +31,7 @@ import {
 import {
   isConnectFourArea,
   isConversationArea,
+  isImpostorArea,
   isTicTacToeArea,
   isViewingArea,
 } from '../types/TypeUtils';
@@ -38,6 +40,7 @@ import ConversationAreaController from './interactable/ConversationAreaControlle
 import AudioPolicy, { canHear, noAudioPolicy } from './impostor/audio/AudioPolicy';
 import DebugAudioPolicy, { debugAudioEnabled } from './impostor/audio/DebugAudioPolicy';
 import GameAreaController, { GameEventTypes } from './interactable/GameAreaController';
+import ImpostorSessionController from './interactable/ImpostorSessionController';
 import InteractableAreaController, {
   BaseInteractableEventMap,
   GenericInteractableAreaController,
@@ -91,6 +94,11 @@ export type TownEvents = {
    * movement, e.g. a player died or a meeting started or ended.
    */
   audioPolicyChanged: () => void;
+
+  /**
+   * An event that indicates private Impostor game state was received for this player.
+   */
+  impostorPrivateUpdate: (privateState: ImpostorPrivateState) => void;
 
   /**
    * An event that indicates that the set of active interactable areas has changed. This event is dispatched
@@ -258,6 +266,10 @@ export default class TownController extends (EventEmitter as new () => TypedEmit
         };
       }
     }
+  }
+
+  public get audioPolicy(): AudioPolicy {
+    return this._audioPolicy;
   }
 
   public set audioPolicy(policy: AudioPolicy) {
@@ -496,6 +508,13 @@ export default class TownController extends (EventEmitter as new () => TypedEmit
         console.trace(err);
       }
     });
+
+    /**
+     * When private Impostor state is received, emit it to controller listeners
+     */
+    this._socket.on('impostorPrivateUpdate', privateState => {
+      this.emit('impostorPrivateUpdate', privateState);
+    });
   }
 
   /**
@@ -664,6 +683,10 @@ export default class TownController extends (EventEmitter as new () => TypedEmit
           } else if (isConnectFourArea(eachInteractable)) {
             this._interactableControllers.push(
               new ConnectFourAreaController(eachInteractable.id, eachInteractable, this),
+            );
+          } else if (isImpostorArea(eachInteractable)) {
+            this._interactableControllers.push(
+              new ImpostorSessionController(eachInteractable.id, eachInteractable, this),
             );
           }
         });
