@@ -13,6 +13,7 @@ import {
   Interactable,
   InteractableCommand,
   InteractableCommandBase,
+  InteractableID,
   Player as PlayerModel,
   PlayerID,
   PlayerLocation,
@@ -23,15 +24,18 @@ import {
 import { logError } from '../Utils';
 import ConversationArea from './ConversationArea';
 import GameAreaFactory from './games/GameAreaFactory';
+import SessionHost from './impostor/SessionHost';
 import VisibilityPolicy from './impostor/visibility/VisibilityPolicy';
 import InteractableArea from './InteractableArea';
 import ViewingArea from './ViewingArea';
 
+/** The events that carry a player's model, and so their location */
+type PositionEvent = 'playerMoved' | 'playerJoined' | 'playerDisconnect';
 /**
  * The Town class implements the logic for each town: managing the various events that
  * can occur (e.g. joining a town, moving, leaving a town)
  */
-export default class Town {
+export default class Town implements SessionHost {
   get capacity(): number {
     return this._capacity;
   }
@@ -102,6 +106,21 @@ export default class Town {
   /** Decides who may receive whose position; undefined means broadcast to everyone */
   private _visibilityPolicy?: VisibilityPolicy;
 
+  /**
+   * For each connected player, the IDs of the players their browser has been told about (the
+   * client's player list). Recorded when they join and kept current by every playerJoined and
+   * playerDisconnect sent, so resyncPositions can send only what changed.
+   */
+  private _knownPlayersByViewer: Map<PlayerID, Set<PlayerID>> = new Map();
+
+  /**
+   * For each connected player, the model (as JSON) their browser was last sent for each area.
+   * Kept current by every interactableUpdate sent, so a viewer is never sent an unchanged model
+   * (which would reveal that a hidden occupant came or went) and resyncPositions can resend only
+   * the areas that changed for them.
+   */
+  private _sentAreasByViewer: Map<PlayerID, Map<InteractableID, string>> = new Map();
+
   private _chatMessages: ChatMessage[] = [];
 
   constructor(
@@ -133,6 +152,16 @@ export default class Town {
 
     // Create a video token for this user to join this town
     newPlayer.videoToken = await this._videoClient.getTokenForTown(this._townID, newPlayer.id);
+
+    // The newcomer's client learns about exactly these players: joinTown builds the initialize
+    // snapshot from the same check as soon as this method returns, with nothing in between.
+    this._knownPlayersByViewer.set(
+      newPlayer.id,
+      new Set(this._playersVisibleTo(newPlayer.id).map(eachPlayer => eachPlayer.id)),
+    );
+    // ...and the interactables list in that snapshot comes from getInteractableModelsVisibleTo
+    this._sentAreasByViewer.set(newPlayer.id, new Map());
+    this._recordAreasShownTo(newPlayer.id, this._interactables);
 
     // Notify other players that this player has joined
     this._emitToViewersOf(newPlayer, 'playerJoined', newPlayer.toPlayerModel());
@@ -170,14 +199,24 @@ export default class Town {
     // For ViewingArea's: dispatches an updateModel call to the viewingArea that
     // corresponds to the interactable being updated. Does not throw an error if
     // the specified viewing area does not exist.
+    // With a visibility policy installed, the client's own model is not relayed: its occupant
+    // list is what that client may see (a ghost sees everyone), so the server's model is sent
+    // instead, filtered for each viewer.
     socket.on('interactableUpdate', (update: Interactable) => {
       if (isViewingArea(update)) {
-        newPlayer.townEmitter.emit('interactableUpdate', update);
+        if (!this._visibilityPolicy) {
+          newPlayer.townEmitter.emit('interactableUpdate', update);
+          const sentModel = JSON.stringify(update);
+          this._sentAreasByViewer.forEach(sentByArea => sentByArea.set(update.id, sentModel));
+        }
         const viewingArea = this._interactables.find(
           eachInteractable => eachInteractable.id === update.id,
         );
         if (viewingArea) {
           (viewingArea as ViewingArea).updateModel(update);
+          if (this._visibilityPolicy) {
+            this._emitAreaUpdate(viewingArea, newPlayer.id);
+          }
         }
       }
     });
@@ -241,6 +280,9 @@ export default class Town {
     // the leaving player up while deciding who may be told about them.
     this._emitToViewersOf(player, 'playerDisconnect', player.toPlayerModel());
     this._players = this._players.filter(p => p.id !== player.id);
+    this._knownPlayersByViewer.delete(player.id);
+    this._knownPlayersByViewer.forEach(eachKnownSet => eachKnownSet.delete(player.id));
+    this._sentAreasByViewer.delete(player.id);
   }
 
   /**
@@ -282,11 +324,119 @@ export default class Town {
   /**
    * Installs (or, with undefined, removes) the policy that decides which players may receive
    * which other players' positions. With no policy, positions are broadcast to the whole town.
+   * Clients learn about the change only when resyncPositions is called.
    *
    * @param policy the policy to consult for every position update, or undefined for none
    */
   public setVisibilityPolicy(policy: VisibilityPolicy | undefined): void {
     this._visibilityPolicy = policy;
+  }
+
+  // AI assistance: written with Claude Code, prompted by Kush; see the PR discussion.
+  /**
+   * Brings every client's player list in line with the current policy: sends `playerJoined` for
+   * each player the client may now see but was not told about, and `playerDisconnect` for each
+   * player it was told about but may no longer see. Sends nothing else, so a client never gets a
+   * second `playerJoined` (its handler would add a duplicate sprite).
+   *
+   * A hidden player's `playerDisconnect` carries their location as of the change, which the
+   * client was already sent, as long as the session resyncs right after marking the change.
+   *
+   * Then resends each area whose occupant list, as that client may see it, differs from the one
+   * it was last sent (for example the area a player died in), and no other area.
+   */
+  public resyncPositions(): void {
+    const areaModels = this._interactables.map(eachArea => eachArea.toModel());
+    for (const [viewerID, knownIDs] of this._knownPlayersByViewer) {
+      const socket = this._socketByPlayer.get(viewerID);
+      if (socket) {
+        for (const subject of this._players) {
+          const mayReceive = this._mayReceive(viewerID, subject.id);
+          if (mayReceive !== knownIDs.has(subject.id)) {
+            const event = mayReceive ? 'playerJoined' : 'playerDisconnect';
+            socket.emit(event, subject.toPlayerModel());
+            this._recordSent(viewerID, event, subject.id);
+          }
+        }
+        // After the player list, so an occupant who just became visible is already known
+        for (const model of areaModels) {
+          this._sendAreaModel(viewerID, socket, this._areaModelFor(viewerID, model));
+        }
+      }
+    }
+  }
+
+  /**
+   * Sends an area's model to the town. With no policy installed this is the starter's room
+   * broadcast. With a policy installed, each connected player gets their own copy listing only
+   * the occupants they may see, and only if it differs from the copy they were last sent.
+   *
+   * @param area the area whose model changed
+   * @param skippedViewerID a player not to send it to (the client the change came from)
+   */
+  private _emitAreaUpdate(area: InteractableArea, skippedViewerID?: PlayerID): void {
+    const model = area.toModel();
+    if (!this._visibilityPolicy) {
+      this._broadcastEmitter.emit('interactableUpdate', model);
+      const sentModel = JSON.stringify(model);
+      this._sentAreasByViewer.forEach(sentByArea => sentByArea.set(model.id, sentModel));
+      return;
+    }
+    for (const [viewerID, socket] of this._socketByPlayer) {
+      const visibleModel = this._areaModelFor(viewerID, model);
+      if (viewerID !== skippedViewerID) {
+        this._sendAreaModel(viewerID, socket, visibleModel);
+      } else {
+        // The client the change came from already shows it
+        this._sentAreasByViewer.get(viewerID)?.set(model.id, JSON.stringify(visibleModel));
+      }
+    }
+  }
+
+  /**
+   * Sends one viewer their copy of an area's model, unless it is exactly the copy they were last
+   * sent, and records it.
+   */
+  private _sendAreaModel(viewerID: PlayerID, socket: CoveyTownSocket, model: Interactable): void {
+    const sentModel = JSON.stringify(model);
+    const sentByArea = this._sentAreasByViewer.get(viewerID);
+    if (sentByArea?.get(model.id) !== sentModel) {
+      socket.emit('interactableUpdate', model);
+      sentByArea?.set(model.id, sentModel);
+    }
+  }
+
+  /** Records that the viewer's client was shown these areas as they stand now */
+  private _recordAreasShownTo(viewerID: PlayerID, areas: InteractableArea[]): void {
+    const sentByArea = this._sentAreasByViewer.get(viewerID);
+    areas.forEach(eachArea =>
+      sentByArea?.set(
+        eachArea.id,
+        JSON.stringify(this._areaModelFor(viewerID, eachArea.toModel())),
+      ),
+    );
+  }
+
+  /**
+   * @returns a copy of the area model whose occupants are only the players the viewer may see;
+   * every other field is unchanged (game state is not filtered, see the 2.B1b PR)
+   */
+  private _areaModelFor(viewerID: PlayerID, model: Interactable): Interactable {
+    return {
+      ...model,
+      occupants: model.occupants.filter(eachID => this._mayReceive(viewerID, eachID)),
+    };
+  }
+
+  /**
+   * The interactables list for a newly joined client's `initialize` snapshot: every area, each
+   * listing only the occupants the viewer may see.
+   *
+   * @param viewerID the player whose browser will receive the snapshot
+   * @returns a model of every area, filtered for the viewer
+   */
+  public getInteractableModelsVisibleTo(viewerID: PlayerID): Interactable[] {
+    return this._interactables.map(eachArea => this._areaModelFor(viewerID, eachArea.toModel()));
   }
 
   /**
@@ -307,25 +457,39 @@ export default class Town {
    * policy installed this is the starter's room broadcast. With a policy installed, it goes only
    * to the sockets of players allowed to see the subject, plus the subject's own socket.
    *
-   * Invariant for 2.B1: a client's player list holds exactly the players it may see.
+   * Invariant for 2.B1: a client's player list holds exactly the players it may see. Joins and
+   * disconnects are recorded per client so resyncPositions can restore it after a change.
    *
    * @param subject the player the model describes
    * @param event which event to send
    * @param model the payload, always the subject's model
    */
-  private _emitToViewersOf(
-    subject: Player,
-    event: 'playerMoved' | 'playerJoined' | 'playerDisconnect',
-    model: PlayerModel,
-  ): void {
+  private _emitToViewersOf(subject: Player, event: PositionEvent, model: PlayerModel): void {
     if (!this._visibilityPolicy) {
       this._broadcastEmitter.emit(event, model);
+      this._knownPlayersByViewer.forEach((_knownIDs, viewerID) =>
+        this._recordSent(viewerID, event, subject.id),
+      );
       return;
     }
     for (const [viewerID, socket] of this._socketByPlayer) {
       if (this._mayReceive(viewerID, subject.id)) {
         socket.emit(event, model);
+        this._recordSent(viewerID, event, subject.id);
       }
+    }
+  }
+
+  /**
+   * Updates the record of who a client was told about after it was sent an event: a join adds
+   * the subject to its player list and a disconnect removes them. Moves change nothing.
+   */
+  private _recordSent(viewerID: PlayerID, event: PositionEvent, subjectID: PlayerID): void {
+    const knownIDs = this._knownPlayersByViewer.get(viewerID);
+    if (event === 'playerJoined') {
+      knownIDs?.add(subjectID);
+    } else if (event === 'playerDisconnect') {
+      knownIDs?.delete(subjectID);
     }
   }
 
@@ -350,9 +514,12 @@ export default class Town {
    * @returns models of every player the viewer may see
    */
   public getPlayerModelsVisibleTo(viewerID: PlayerID): PlayerModel[] {
-    return this._players
-      .filter(eachPlayer => this._mayReceive(viewerID, eachPlayer.id))
-      .map(eachPlayer => eachPlayer.toPlayerModel());
+    return this._playersVisibleTo(viewerID).map(eachPlayer => eachPlayer.toPlayerModel());
+  }
+
+  /** @returns the players the viewer may be told about now, the viewer included */
+  private _playersVisibleTo(viewerID: PlayerID): Player[] {
+    return this._players.filter(eachPlayer => this._mayReceive(viewerID, eachPlayer.id));
   }
 
   /**
@@ -396,7 +563,7 @@ export default class Town {
     }
     area.topic = conversationArea.topic;
     area.addPlayersWithinBounds(this._players);
-    this._broadcastEmitter.emit('interactableUpdate', area.toModel());
+    this._emitAreaUpdate(area);
     return true;
   }
 
@@ -426,7 +593,7 @@ export default class Town {
     }
     area.updateModel(viewingArea);
     area.addPlayersWithinBounds(this._players);
-    this._broadcastEmitter.emit('interactableUpdate', area.toModel());
+    this._emitAreaUpdate(area);
     return true;
   }
 
@@ -511,14 +678,18 @@ export default class Town {
       .filter(eachObject => eachObject.type === 'GameArea')
       .map(eachGameAreaObj => GameAreaFactory(eachGameAreaObj, this._broadcastEmitter));
 
-    this._interactables = this._interactables
-      .concat(viewingAreas)
-      .concat(conversationAreas)
-      .concat(gameAreas);
+    const newAreas = [...viewingAreas, ...conversationAreas, ...gameAreas];
+    this._interactables = this._interactables.concat(newAreas);
     this._validateInteractables();
-    // Areas announce occupants' interactableID changes through the visibility choke point
-    this._interactables.forEach(eachInteractable =>
-      eachInteractable.setPlayerMovedNotifier(player => this._emitPlayerMoved(player)),
+    // Areas announce occupants' interactableID changes and their own model changes through the
+    // visibility choke point
+    this._interactables.forEach(eachInteractable => {
+      eachInteractable.setPlayerMovedNotifier(player => this._emitPlayerMoved(player));
+      eachInteractable.setAreaChangedNotifier(area => this._emitAreaUpdate(area));
+    });
+    // Clients already connected start with these areas empty, as a new area from the map is
+    this._sentAreasByViewer.forEach((_sentByArea, viewerID) =>
+      this._recordAreasShownTo(viewerID, newAreas),
     );
   }
 

@@ -6,6 +6,7 @@ import { ConversationArea, Interactable, TownEmitter, ViewingArea } from '../typ
 import TownsStore from '../lib/TownsStore';
 import {
   createConversationForTesting,
+  getEventListener,
   getLastEmittedEvent,
   extractSessionToken,
   mockPlayer,
@@ -241,6 +242,42 @@ describe('TownsController integration tests', () => {
       await controller.joinTown(late.socket);
       const lateData = getLastEmittedEvent(late.socket, 'initialize');
       expect(lateData.currentPlayers.map(eachPlayer => eachPlayer.id)).toEqual([lateData.userID]);
+    });
+    // AI assistance: written with Claude Code, prompted by Kush; see the PR discussion.
+    it('Leaves hidden occupants out of the areas in the initial join data', async () => {
+      const townData = await createTownForTesting(undefined, true);
+      const town = TownsStore.getInstance().getTownByID(townData.townID);
+      assert(town);
+      const first = mockPlayer(townData.townID);
+      await controller.joinTown(first.socket);
+      const firstID = getLastEmittedEvent(first.socket, 'initialize').userID;
+      const area = town.interactables.find(eachArea => isConversationArea(eachArea.toModel()));
+      assert(area);
+      const { x, y, width, height } = area.boundingBox;
+      getEventListener(
+        first.socket,
+        'playerMovement',
+      )({
+        x: x + width / 2,
+        y: y + height / 2,
+        rotation: 'front',
+        moving: false,
+      });
+      town.addConversationArea({
+        id: area.id,
+        topic: 'hi',
+        occupants: [],
+        type: 'ConversationArea',
+      });
+      const occupantsSeenBy = async (joiner: MockedPlayer) => {
+        await controller.joinTown(joiner.socket);
+        const joinData = getLastEmittedEvent(joiner.socket, 'initialize');
+        return joinData.interactables.find(eachArea => eachArea.id === area.id)?.occupants;
+      };
+      expect(await occupantsSeenBy(mockPlayer(townData.townID))).toEqual([firstID]);
+
+      town.setVisibilityPolicy({ canSee: (_viewerID, subjectID) => subjectID !== firstID });
+      expect(await occupantsSeenBy(mockPlayer(townData.townID))).toEqual([]);
     });
     it('Includes active conversation areas in the initial join data', async () => {
       const town = await createTownForTesting(undefined, true);

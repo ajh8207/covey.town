@@ -218,7 +218,7 @@ export class TownsController extends Controller {
       currentPlayers: town.getPlayerModelsVisibleTo(newPlayer.id),
       friendlyName: town.friendlyName,
       isPubliclyListed: town.isPubliclyListed,
-      interactables: town.interactables.map(eachInteractable => eachInteractable.toModel()),
+      interactables: town.getInteractableModelsVisibleTo(newPlayer.id),
     });
   }
 }

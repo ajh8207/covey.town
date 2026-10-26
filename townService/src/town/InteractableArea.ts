@@ -37,6 +37,9 @@ export default abstract class InteractableArea {
   /* Sends an occupant's playerMoved update; defaults to a town-wide broadcast */
   private _notifyPlayerMoved: (player: Player) => void;
 
+  /* Sends this area's interactableUpdate; defaults to a town-wide broadcast */
+  private _notifyAreaChanged: (area: InteractableArea) => void;
+
   public get id() {
     return this._id;
   }
@@ -72,6 +75,7 @@ export default abstract class InteractableArea {
     this._townEmitter = townEmitter;
     this._notifyPlayerMoved = player =>
       this._townEmitter.emit('playerMoved', player.toPlayerModel());
+    this._notifyAreaChanged = area => this._townEmitter.emit('interactableUpdate', area.toModel());
   }
 
   /**
@@ -83,6 +87,18 @@ export default abstract class InteractableArea {
    */
   public setPlayerMovedNotifier(notify: (player: Player) => void): void {
     this._notifyPlayerMoved = notify;
+  }
+
+  // AI assistance: written with Claude Code, prompted by Kush; see the PR discussion.
+  /**
+   * Replaces how this area announces that its model changed. The Town installs a sender that
+   * leaves out occupants a viewer may not see; without it the area broadcasts its full model to
+   * the whole town, exactly as the starter does.
+   *
+   * @param notify called with this area whenever its model must be sent
+   */
+  public setAreaChangedNotifier(notify: (area: InteractableArea) => void): void {
+    this._notifyAreaChanged = notify;
   }
 
   /**
@@ -179,7 +195,7 @@ export default abstract class InteractableArea {
    * the model for this InteractableArea in that event.
    */
   protected _emitAreaChanged() {
-    this._townEmitter.emit('interactableUpdate', this.toModel());
+    this._notifyAreaChanged(this);
   }
 
   /**

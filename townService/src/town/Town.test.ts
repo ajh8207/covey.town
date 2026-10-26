@@ -1,4 +1,4 @@
-import { ITiledMap } from '@jonbell/tiled-map-type-guard';
+import { ITiledMap, ITiledMapObjectLayer } from '@jonbell/tiled-map-type-guard';
 import { DeepMockProxy, mockClear, mockDeep, mockReset } from 'jest-mock-extended';
 import { nanoid } from 'nanoid';
 import Player from '../lib/Player';
@@ -1116,8 +1116,8 @@ describe('Town', () => {
 
     // AI assistance: written with Claude Code, prompted by Kush; see the PR discussion.
     describe('With the session policy installed', () => {
-      // Covers the events that carry a player model. Area updates (interactableUpdate) still
-      // list occupants by ID; that leak is closed in 2.B1b.
+      // Covers the events that carry a player model. Area updates (interactableUpdate) are
+      // covered by the 2.B1b block further down.
       const classByPlayer = new Map<PlayerID, VisibilityClass>();
       let dave: MockedPlayer;
 
@@ -1199,6 +1199,527 @@ describe('Town', () => {
         expect(snapshotIDs).toEqual(expect.arrayContaining([idOf(bob), idOf(playerTestData)]));
         expect(snapshotIDs).toHaveLength(2);
         expect(town.getPlayerModelsVisibleTo(idOf(alice))).toHaveLength(4);
+      });
+    });
+
+    // AI assistance: written with Claude Code, prompted by Kush; see the PR discussion.
+    describe('resyncPositions (SessionHost)', () => {
+      const classByPlayer = new Map<PlayerID, VisibilityClass>();
+      let isAliceVenting: boolean;
+      let dave: MockedPlayer;
+
+      /** The joins and disconnects sent to `viewer`, as 'event:subjectName' strings */
+      function listChangesSentTo(viewer: MockedPlayer): string[] {
+        const names = new Map(
+          [playerTestData, alice, bob, carol, dave].map(eachPlayer => [
+            eachPlayer.player?.id,
+            eachPlayer === playerTestData ? 'tester' : eachPlayer.userName,
+          ]),
+        );
+        return viewer.socket.emit.mock.calls
+          .filter(eachCall => eachCall[0] === 'playerJoined' || eachCall[0] === 'playerDisconnect')
+          .map(eachCall => `${eachCall[0]}:${names.get((eachCall[1] as PlayerModel).id)}`);
+      }
+
+      function clearSentEvents(): void {
+        for (const eachPlayer of [playerTestData, alice, bob, carol, dave]) {
+          eachPlayer.socket.emit.mockClear();
+        }
+        mockReset(townEmitter);
+      }
+
+      const joined = (subject: MockedPlayer) => `playerJoined:${subject.userName}`;
+      const left = (subject: MockedPlayer) => `playerDisconnect:${subject.userName}`;
+
+      /** Installs the session policy, plus a DS-5 style rule hiding a venting alice */
+      function startGame(): void {
+        town.setVisibilityPolicy(
+          new SessionVisibilityPolicy(
+            { visibilityClassOf: classifiedID => classByPlayer.get(classifiedID) ?? 'spectator' },
+            [
+              {
+                name: 'alice is in a vent',
+                hides: (viewerID, subjectID) =>
+                  isAliceVenting &&
+                  subjectID === idOf(alice) &&
+                  classByPlayer.get(viewerID) === 'alive',
+              },
+            ],
+          ),
+        );
+        town.resyncPositions();
+      }
+
+      beforeEach(() => {
+        dave = mockPlayer(town.townID);
+        isAliceVenting = false;
+        classByPlayer.clear();
+        for (const eachPlayer of [playerTestData, alice, bob, carol]) {
+          classByPlayer.set(idOf(eachPlayer), 'alive');
+        }
+        alice.moveTo(10, 20);
+        clearSentEvents();
+      });
+
+      describe('With no policy installed', () => {
+        it('Sends nothing, per socket or to the town room', () => {
+          town.resyncPositions();
+          for (const eachPlayer of [playerTestData, alice, bob, carol]) {
+            expect(eachPlayer.socket.emit).not.toHaveBeenCalled();
+          }
+          expect(townEmitter.emit).not.toHaveBeenCalled();
+        });
+        it('Still sends nothing after a player joins and another leaves', async () => {
+          dave.player = await town.addPlayer(dave.userName, dave.socket);
+          getEventListener(bob.socket, 'disconnect')('unknown');
+          clearSentEvents();
+          town.resyncPositions();
+          for (const eachPlayer of [playerTestData, alice, carol, dave]) {
+            expect(eachPlayer.socket.emit).not.toHaveBeenCalled();
+          }
+        });
+        it('Remembers broadcast joins: hiding the newcomer later tells everyone else', async () => {
+          dave.player = await town.addPlayer(dave.userName, dave.socket);
+          clearSentEvents();
+          startGame(); // dave is not in the roster, so he is a spectator
+          for (const eachPlayer of [playerTestData, alice, bob, carol]) {
+            expect(listChangesSentTo(eachPlayer)).toEqual([left(dave)]);
+          }
+          expect(listChangesSentTo(dave)).toEqual([]);
+        });
+      });
+
+      describe('During a game', () => {
+        beforeEach(() => {
+          startGame();
+        });
+        it('Sends nothing at game start when everyone is alive', () => {
+          for (const eachPlayer of [playerTestData, alice, bob, carol]) {
+            expect(eachPlayer.socket.emit).not.toHaveBeenCalled();
+          }
+        });
+        describe('After alice dies (marked dead, then resync)', () => {
+          beforeEach(() => {
+            clearSentEvents();
+            classByPlayer.set(idOf(alice), 'ghost');
+            town.resyncPositions();
+          });
+          it('Tells each living player once that alice left, and nothing else', () => {
+            for (const eachLiving of [playerTestData, bob, carol]) {
+              expect(listChangesSentTo(eachLiving)).toEqual([left(alice)]);
+            }
+          });
+          it('Sends the living only the location they already had for alice', () => {
+            const sentModel = eventsSentTo(bob, 'playerDisconnect', idOf(alice))[0];
+            expect(sentModel.location).toMatchObject({ x: 10, y: 20 });
+          });
+          it('Sends alice nothing: as a ghost she keeps seeing everyone', () => {
+            expect(alice.socket.emit).not.toHaveBeenCalled();
+            bob.moveTo(30, 40);
+            expect(eventsSentTo(alice, 'playerMoved', idOf(bob))).toHaveLength(1);
+          });
+          it("Stops alice's moves reaching the living", () => {
+            alice.moveTo(50, 60);
+            for (const eachLiving of [playerTestData, bob, carol]) {
+              expect(eventsSentTo(eachLiving, 'playerMoved', idOf(alice))).toHaveLength(0);
+            }
+            expect(eventsSentTo(alice, 'playerMoved', idOf(alice))).toHaveLength(1);
+          });
+          it('Sends nothing on a second resync with no change', () => {
+            clearSentEvents();
+            town.resyncPositions();
+            for (const eachPlayer of [playerTestData, alice, bob, carol]) {
+              expect(eachPlayer.socket.emit).not.toHaveBeenCalled();
+            }
+          });
+          it('Shows alice again to carol when carol dies too, and tells only carol', () => {
+            clearSentEvents();
+            classByPlayer.set(idOf(carol), 'ghost');
+            town.resyncPositions();
+            expect(listChangesSentTo(carol)).toEqual([joined(alice)]);
+            expect(listChangesSentTo(alice)).toEqual([]);
+            expect(listChangesSentTo(bob)).toEqual([left(carol)]);
+            expect(listChangesSentTo(playerTestData)).toEqual([left(carol)]);
+          });
+          it('Restores alice for everyone at game end (policy removed, then resync)', () => {
+            alice.moveTo(70, 80);
+            clearSentEvents();
+            town.setVisibilityPolicy(undefined);
+            town.resyncPositions();
+            for (const eachLiving of [playerTestData, bob, carol]) {
+              expect(listChangesSentTo(eachLiving)).toEqual([joined(alice)]);
+              const sentModel = eventsSentTo(eachLiving, 'playerJoined', idOf(alice))[0];
+              expect(sentModel.location).toMatchObject({ x: 70, y: 80 });
+            }
+            expect(alice.socket.emit).not.toHaveBeenCalled();
+            alice.moveTo(90, 90);
+            expect(getLastEmittedEvent(townEmitter, 'playerMoved').id).toEqual(idOf(alice));
+          });
+          it('Forgets alice when she leaves: game end then sends nothing about her', () => {
+            getEventListener(alice.socket, 'disconnect')('unknown');
+            expect(eventsSentTo(bob, 'playerDisconnect', idOf(alice))).toHaveLength(1);
+            clearSentEvents();
+            town.setVisibilityPolicy(undefined);
+            town.resyncPositions();
+            for (const eachPlayer of [playerTestData, bob, carol]) {
+              expect(eachPlayer.socket.emit).not.toHaveBeenCalled();
+            }
+          });
+        });
+        describe('When dave joins mid-game (a spectator)', () => {
+          beforeEach(async () => {
+            dave.player = await town.addPlayer(dave.userName, dave.socket);
+          });
+          it('Tells only dave about himself, and the living nothing', () => {
+            expect(listChangesSentTo(dave)).toEqual([joined(dave)]);
+            for (const eachPlayer of [playerTestData, alice, bob, carol]) {
+              expect(listChangesSentTo(eachPlayer)).toEqual([]);
+            }
+          });
+          it('Sends nothing on resync: his snapshot already held everyone', () => {
+            expect(town.getPlayerModelsVisibleTo(idOf(dave))).toHaveLength(5);
+            clearSentEvents();
+            town.resyncPositions();
+            for (const eachPlayer of [playerTestData, alice, bob, carol, dave]) {
+              expect(eachPlayer.socket.emit).not.toHaveBeenCalled();
+            }
+          });
+          it('Shows dave to everyone at game end', () => {
+            clearSentEvents();
+            town.setVisibilityPolicy(undefined);
+            town.resyncPositions();
+            for (const eachPlayer of [playerTestData, alice, bob, carol]) {
+              expect(listChangesSentTo(eachPlayer)).toEqual([joined(dave)]);
+            }
+            expect(dave.socket.emit).not.toHaveBeenCalled();
+          });
+        });
+        describe('When alice enters and leaves a vent (resync after each change)', () => {
+          beforeEach(() => {
+            classByPlayer.set(idOf(carol), 'ghost');
+            town.resyncPositions();
+            clearSentEvents();
+            isAliceVenting = true;
+            town.resyncPositions();
+          });
+          it('Hides alice from the living, but not from the ghost carol', () => {
+            expect(listChangesSentTo(bob)).toEqual([left(alice)]);
+            expect(listChangesSentTo(playerTestData)).toEqual([left(alice)]);
+            expect(listChangesSentTo(carol)).toEqual([]);
+          });
+          it('Shows alice again where she came out of the vent', () => {
+            alice.moveTo(55, 66);
+            clearSentEvents();
+            isAliceVenting = false;
+            town.resyncPositions();
+            expect(listChangesSentTo(bob)).toEqual([joined(alice)]);
+            const sentModel = eventsSentTo(bob, 'playerJoined', idOf(alice))[0];
+            expect(sentModel.location).toMatchObject({ x: 55, y: 66 });
+            expect(listChangesSentTo(carol)).toEqual([]);
+          });
+        });
+      });
+    });
+
+    // AI assistance: written with Claude Code, prompted by Kush; see the PR discussion.
+    describe('Area updates and the initialize interactables (2.B1b)', () => {
+      const classByPlayer = new Map<PlayerID, VisibilityClass>();
+      let dave: MockedPlayer;
+
+      /** twoConvOneViewing plus the tic-tac-toe area 'Game1', which is always active */
+      function mapWithGameArea(): ITiledMap {
+        const map = JSON.parse(JSON.stringify(testingMaps.twoConvOneViewing)) as ITiledMap;
+        (map.layers[0] as ITiledMapObjectLayer).objects.push({
+          type: 'GameArea',
+          height: 200,
+          id: 60,
+          name: 'Game1',
+          properties: [{ name: 'type', type: 'string', value: 'TicTacToe' }],
+          rotation: 0,
+          visible: true,
+          width: 200,
+          x: 700,
+          y: 600,
+        });
+        return map;
+      }
+
+      /** The interactableUpdate payloads sent directly to `viewer`'s socket, oldest first */
+      function areaUpdatesSentTo(viewer: MockedPlayer): Interactable[] {
+        return viewer.socket.emit.mock.calls
+          .filter(eachCall => eachCall[0] === 'interactableUpdate')
+          .map(eachCall => eachCall[1] as Interactable);
+      }
+
+      /** The occupant lists of every update about `areaID` sent to `viewer`, oldest first */
+      function occupantsSentTo(viewer: MockedPlayer, areaID: string): PlayerID[][] {
+        return areaUpdatesSentTo(viewer)
+          .filter(eachModel => eachModel.id === areaID)
+          .map(eachModel => eachModel.occupants);
+      }
+
+      /** The names of the events sent directly to `viewer`'s socket, in order */
+      function eventNamesSentTo(viewer: MockedPlayer): string[] {
+        return viewer.socket.emit.mock.calls.map(eachCall => eachCall[0] as string);
+      }
+
+      function clearSentEvents(): void {
+        for (const eachPlayer of [playerTestData, alice, bob, carol, dave]) {
+          eachPlayer.socket.emit.mockClear();
+          eachPlayer.socketToRoomMock.emit.mockClear();
+        }
+        mockReset(townEmitter);
+      }
+
+      function expectNothingSent(): void {
+        for (const eachPlayer of [playerTestData, alice, bob, carol, dave]) {
+          expect(eachPlayer.socket.emit).not.toHaveBeenCalled();
+        }
+        expect(townEmitter.emit).not.toHaveBeenCalled();
+      }
+
+      function startGame(): void {
+        town.setVisibilityPolicy(
+          new SessionVisibilityPolicy({
+            visibilityClassOf: classifiedID => classByPlayer.get(classifiedID) ?? 'spectator',
+          }),
+        );
+        town.resyncPositions();
+      }
+
+      const createName1 = () =>
+        town.addConversationArea({
+          id: 'Name1',
+          topic: nanoid(),
+          occupants: [],
+          type: 'ConversationArea',
+        });
+
+      beforeEach(() => {
+        town.initializeFromMap(mapWithGameArea());
+        dave = mockPlayer(town.townID);
+        classByPlayer.clear();
+        for (const eachPlayer of [playerTestData, alice, bob, carol]) {
+          classByPlayer.set(idOf(eachPlayer), 'alive');
+        }
+        clearSentEvents();
+      });
+
+      describe('With no policy installed (the starter behavior)', () => {
+        beforeEach(() => {
+          alice.moveTo(45, 122); // into Name1, which is not active yet
+          createName1();
+          carol.moveTo(750, 650); // into Game1
+        });
+        it('Broadcasts full occupant lists to the town and sends none per socket', () => {
+          const broadcastAreas = townEmitter.emit.mock.calls
+            .filter(eachCall => eachCall[0] === 'interactableUpdate')
+            .map(eachCall => eachCall[1] as Interactable);
+          expect(broadcastAreas.map(eachModel => [eachModel.id, eachModel.occupants])).toEqual([
+            ['Name1', [idOf(alice)]],
+            ['Name1', [idOf(alice)]],
+            ['Game1', [idOf(carol)]],
+          ]);
+          for (const eachPlayer of [playerTestData, alice, bob, carol]) {
+            expect(areaUpdatesSentTo(eachPlayer)).toEqual([]);
+          }
+        });
+        it('Puts every area, unchanged, in the initialize interactables', () => {
+          expect(town.getInteractableModelsVisibleTo(idOf(bob))).toEqual(
+            town.interactables.map(eachArea => eachArea.toModel()),
+          );
+        });
+        it('Sends nothing on resync', () => {
+          clearSentEvents();
+          town.resyncPositions();
+          expectNothingSent();
+        });
+        it('Still relays a viewing area update from a client to the rest of the town', () => {
+          const update = { ...town.getInteractable('Name3').toModel(), isPlaying: true };
+          getEventListener(bob.socket, 'interactableUpdate')(update as ViewingAreaModel);
+          expect(getLastEmittedEvent(bob.socketToRoomMock, 'interactableUpdate')).toBe(update);
+        });
+      });
+
+      it('Sends nothing at game start when everyone is alive, even with occupied areas', () => {
+        alice.moveTo(45, 122);
+        createName1();
+        carol.moveTo(750, 650);
+        clearSentEvents();
+        startGame();
+        expectNothingSent();
+      });
+
+      describe('During a game with ghosts (alice, carol) and a spectator (dave)', () => {
+        beforeEach(async () => {
+          classByPlayer.set(idOf(alice), 'ghost');
+          classByPlayer.set(idOf(carol), 'ghost');
+          startGame();
+          clearSentEvents();
+          // Every path that sends an area model, with ghosts, the living and a spectator in it
+          alice.moveTo(45, 122); // into Name1, which is not active yet
+          createName1(); // add() for alice, then addConversationArea's own update
+          bob.moveTo(60, 130); // add() into the active Name1
+          carol.moveTo(750, 650); // add() into Game1
+          alice.moveTo(160, 600); // remove() from Name1; Name3 is not active yet
+          town.addViewingArea({
+            id: 'Name3',
+            video: nanoid(),
+            isPlaying: false,
+            elapsedTimeSec: 0,
+            occupants: [],
+            type: 'ViewingArea',
+          }); // add() for alice, then addViewingArea's own update
+          // alice's client reports the video playing, listing the occupants it sees
+          const aliceUpdate = {
+            ...town.getInteractable('Name3').toModel(),
+            isPlaying: true,
+            occupants: [idOf(alice), idOf(carol)],
+          };
+          getEventListener(alice.socket, 'interactableUpdate')(aliceUpdate as ViewingAreaModel);
+          getEventListener(carol.socket, 'disconnect')('unknown'); // remove() from Game1
+          dave.player = await town.addPlayer(dave.userName, dave.socket);
+          dave.moveTo(70, 140); // add() into Name1
+        });
+
+        it("Never sends a living player a ghost's or spectator's ID in an area update", () => {
+          const hiddenIDs = [alice, carol, dave].map(idOf);
+          for (const eachLiving of [playerTestData, bob]) {
+            expect(areaUpdatesSentTo(eachLiving)).toHaveLength(4);
+            for (const eachUpdate of areaUpdatesSentTo(eachLiving)) {
+              for (const eachID of hiddenIDs) {
+                expect(JSON.stringify(eachUpdate)).not.toContain(eachID);
+              }
+            }
+          }
+          expect(() => getLastEmittedEvent(townEmitter, 'interactableUpdate')).toThrowError();
+          expect(() => getLastEmittedEvent(alice.socketToRoomMock, 'interactableUpdate')).toThrow();
+        });
+        it('Still lists the living occupants for the living', () => {
+          // Name1 gets its topic, then bob walks in
+          expect(occupantsSentTo(bob, 'Name1')).toEqual([[], [idOf(bob)]]);
+          // Name3 gets its video, then alice's client starts it
+          expect(occupantsSentTo(playerTestData, 'Name3')).toEqual([[], []]);
+        });
+        it('Sends the living nothing when only a hidden player comes or goes', () => {
+          // carol entered and left Game1; alice left Name1 and dave entered it
+          expect(occupantsSentTo(bob, 'Game1')).toEqual([]);
+          expect(occupantsSentTo(playerTestData, 'Game1')).toEqual([]);
+          expect(occupantsSentTo(bob, 'Name1')).toHaveLength(2);
+        });
+        it('Sends ghosts the full occupant list of every area', () => {
+          expect(occupantsSentTo(alice, 'Name1')).toEqual([
+            [idOf(alice)],
+            [idOf(alice), idOf(bob)],
+            [idOf(bob)],
+            [idOf(bob), idOf(dave)],
+          ]);
+          expect(occupantsSentTo(alice, 'Game1')).toEqual([[idOf(carol)], []]);
+          expect(occupantsSentTo(alice, 'Name3')).toEqual([[idOf(alice)]]);
+        });
+        it("Sends the others the server's viewing area model, not the client's own", () => {
+          const relayed = areaUpdatesSentTo(bob).filter(eachModel => eachModel.id === 'Name3');
+          expect(relayed.pop()).toMatchObject({ isPlaying: true, occupants: [] });
+          expect(occupantsSentTo(dave, 'Name3')).toEqual([]); // dave joined later
+          expect(town.getInteractableModelsVisibleTo(idOf(dave))).toContainEqual(
+            expect.objectContaining({ id: 'Name3', isPlaying: true, occupants: [idOf(alice)] }),
+          );
+        });
+        it("Leaves ghosts and spectators out of a living player's initialize interactables", () => {
+          const models = town.getInteractableModelsVisibleTo(idOf(bob));
+          const payload = JSON.stringify(models);
+          [alice, carol, dave].map(idOf).forEach(eachID => expect(payload).not.toContain(eachID));
+          expect(models).toHaveLength(town.interactables.length);
+          expect(models.find(eachModel => eachModel.id === 'Name1')?.occupants).toEqual([
+            idOf(bob),
+          ]);
+        });
+        it('Gives ghosts and the spectator every occupant in initialize interactables', () => {
+          for (const eachViewer of [alice, dave]) {
+            expect(town.getInteractableModelsVisibleTo(idOf(eachViewer))).toEqual(
+              town.interactables.map(eachArea => eachArea.toModel()),
+            );
+          }
+        });
+        it('Sends nothing on resync when nothing changed', () => {
+          clearSentEvents();
+          town.resyncPositions();
+          expectNothingSent();
+        });
+      });
+
+      describe('After alice dies in Name1 (marked dead, then resync)', () => {
+        beforeEach(() => {
+          alice.moveTo(45, 122);
+          createName1();
+          bob.moveTo(60, 130); // Name1 = [alice, bob]
+          carol.moveTo(750, 650); // Game1 = [carol]
+          startGame();
+          clearSentEvents();
+          classByPlayer.set(idOf(alice), 'ghost');
+          town.resyncPositions();
+        });
+        it('Sends each living player one update, for Name1, without alice', () => {
+          for (const eachLiving of [playerTestData, bob, carol]) {
+            expect(areaUpdatesSentTo(eachLiving)).toHaveLength(1);
+            expect(areaUpdatesSentTo(eachLiving)[0]).toMatchObject({
+              id: 'Name1',
+              occupants: [idOf(bob)],
+            });
+          }
+        });
+        it('Sends it after telling them alice left', () => {
+          for (const eachLiving of [playerTestData, bob, carol]) {
+            expect(eventNamesSentTo(eachLiving)).toEqual([
+              'playerDisconnect',
+              'interactableUpdate',
+            ]);
+          }
+        });
+        it('Sends alice nothing: as a ghost she still sees every occupant', () => {
+          expect(alice.socket.emit).not.toHaveBeenCalled();
+        });
+        it('Sends nothing on a second resync', () => {
+          clearSentEvents();
+          town.resyncPositions();
+          expectNothingSent();
+        });
+        it('Keeps alice out of later updates to Name1 for the living', () => {
+          playerTestData.moveTo(70, 140); // Name1 = [alice, bob, tester]
+          expect(occupantsSentTo(bob, 'Name1').pop()).toEqual([idOf(bob), idOf(playerTestData)]);
+          expect(occupantsSentTo(alice, 'Name1').pop()).toEqual([
+            idOf(alice),
+            idOf(bob),
+            idOf(playerTestData),
+          ]);
+        });
+        it('Sends only the player list change when the victim stood in no area', () => {
+          clearSentEvents();
+          classByPlayer.set(idOf(playerTestData), 'ghost');
+          town.resyncPositions();
+          for (const eachLiving of [bob, carol]) {
+            expect(eventNamesSentTo(eachLiving)).toEqual(['playerDisconnect']);
+          }
+        });
+        it('Lists alice again for everyone at game end, after her playerJoined', () => {
+          clearSentEvents();
+          town.setVisibilityPolicy(undefined);
+          town.resyncPositions();
+          for (const eachLiving of [playerTestData, bob, carol]) {
+            expect(eventNamesSentTo(eachLiving)).toEqual(['playerJoined', 'interactableUpdate']);
+            expect(areaUpdatesSentTo(eachLiving)[0]).toMatchObject({
+              id: 'Name1',
+              occupants: [idOf(alice), idOf(bob)],
+            });
+          }
+          expect(alice.socket.emit).not.toHaveBeenCalled();
+          playerTestData.moveTo(70, 140);
+          expect(getLastEmittedEvent(townEmitter, 'interactableUpdate').occupants).toEqual([
+            idOf(alice),
+            idOf(bob),
+            idOf(playerTestData),
+          ]);
+        });
       });
     });
   });
