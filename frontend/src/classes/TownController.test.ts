@@ -481,6 +481,49 @@ describe('TownController', () => {
         PlayerController.fromPlayerModel(testPlayer),
       );
     });
+    // AI assistance: written with Claude Code, prompted by Kush; see the PR discussion.
+    describe('When the townService hides a player (a ghost) and later shows them again', () => {
+      const movedTo = (model: PlayerModel, x: number, y: number): PlayerModel => ({
+        ...model,
+        location: { ...model.location, x, y },
+      });
+
+      it('Drops the player on playerDisconnect and builds a fresh one on playerJoined', () => {
+        const hiddenController = testController.players[0];
+        hiddenController.gameObjects = {} as PlayerController['gameObjects'];
+        getEventListener(mockSocket, 'playerDisconnect')(testPlayer);
+        expect(testController.players).toEqual([]);
+
+        getEventListener(mockSocket, 'playerJoined')(movedTo(testPlayer, 50, 60));
+        expect(testController.players).toHaveLength(1);
+        const shownAgain = testController.players[0];
+        expect(shownAgain).not.toBe(hiddenController);
+        expect(shownAgain.id).toEqual(testPlayer.id);
+        expect([shownAgain.location.x, shownAgain.location.y]).toEqual([50, 60]);
+        // the scene draws a sprite for a controller that has none, so the old one is not reused
+        expect(shownAgain.gameObjects).toBeUndefined();
+      });
+      it('Ignores moves of a player it was told had left', () => {
+        getEventListener(mockSocket, 'playerDisconnect')(testPlayer);
+        const onMove = jest.fn();
+        testController.addListener('playerMoved', onMove);
+        getEventListener(mockSocket, 'playerMoved')(movedTo(testPlayer, 7, 8));
+        expect(onMove).not.toHaveBeenCalled();
+        expect(testController.players).toEqual([]);
+      });
+      it('Leaves every other player untouched', () => {
+        const other: PlayerModel = {
+          id: nanoid(),
+          userName: nanoid(),
+          location: { moving: false, rotation: 'front', x: 3, y: 4 },
+        };
+        getEventListener(mockSocket, 'playerJoined')(other);
+        const otherController = testController.players.find(each => each.id === other.id);
+        getEventListener(mockSocket, 'playerDisconnect')(testPlayer);
+        expect(testController.players).toHaveLength(1);
+        expect(testController.players[0]).toBe(otherController);
+      });
+    });
   });
   it('Disconnects the socket and clears the coveyTownController when disconnection', async () => {
     emitEventAndExpectListenerFiring('townClosing', undefined, 'disconnect');

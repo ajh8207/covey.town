@@ -9,6 +9,7 @@ import { Server as SocketServer } from 'socket.io';
 import { RegisterRoutes } from '../generated/routes';
 import TownsStore from './lib/TownsStore';
 import { ClientToServerEvents, ServerToClientEvents } from './types/CoveyTownSocket';
+import registerDevGhostRoutes from './town/impostor/visibility/DevGhostRoutes';
 import { TownsController } from './town/TownsController';
 import { logError } from './Utils';
 
@@ -40,6 +41,11 @@ app.use('/docs', swaggerUi.serve, async (_req: Express.Request, res: Express.Res
 
 // Register the TownsController routes with the express server
 RegisterRoutes(app);
+
+// AI assistance: written with Claude Code, prompted by Kush; see the PR discussion.
+// Dev only: lets a browser tab turn a player in DEBUG_TOWN into a ghost. Does nothing unless the
+// server is started with DEV_GHOST_ROUTES=true.
+registerDevGhostRoutes(app, TownsStore.getInstance());
 
 // Add a middleware for Express to handle errors
 app.use(
