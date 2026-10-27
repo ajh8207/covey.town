@@ -184,6 +184,32 @@ describe('MeetingManager', () => {
       expect(onResult).toHaveBeenLastCalledWith('SKIP');
     });
 
+    it('Drops votes from or for a player who left during VOTING', () => {
+      startVoting();
+      meeting.castVote('p1', 'p3');
+      meeting.castVote('p2', 'p3');
+      meeting.castVote('p3', 'p1');
+      meeting.castVote('p4', 'p1');
+      alive = ['p1', 'p2', 'p4'];
+      jest.advanceTimersByTime(20_000);
+      // p1 and p2 voted for p3 and p3's own vote is gone, leaving only p4's vote for p1
+      expect(onResult).toHaveBeenCalledWith('p1');
+      expect(meeting.hasVoted).toEqual(['p4']);
+      expect(meeting.toState().votes).toEqual([{ voter: 'p4', target: 'p1' }]);
+    });
+
+    it('Still reaches RESULTS and ends when onResult throws', () => {
+      onResult.mockImplementation(() => {
+        throw new Error('controller failed');
+      });
+      startVoting();
+      expect(() => jest.advanceTimersByTime(20_000)).toThrow('controller failed');
+      expect(meeting.phase).toBe('RESULTS');
+      jest.advanceTimersByTime(5_000);
+      expect(meeting.phase).toBeUndefined();
+      expect(() => meeting.start('p2')).not.toThrow();
+    });
+
     it('Does not call onResult after dispose', () => {
       startVoting();
       meeting.castVote('p1', 'p2');

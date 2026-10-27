@@ -22,7 +22,8 @@ export type MeetingState = Pick<
 /**
  * Runs one emergency meeting at a time: DISCUSSION, then VOTING, then RESULTS, each lasting the
  * duration in the session settings. Living players vote during VOTING; when it ends the votes are
- * tallied and the outcome handed to onResult. After RESULTS the meeting ends and a new one may start.
+ * tallied and the outcome handed to onResult. After RESULTS the meeting ends and a new one may
+ * start.
  */
 export default class MeetingManager {
   private readonly _settings: SessionSettings;
@@ -49,7 +50,9 @@ export default class MeetingManager {
    * @param settings The session settings that give each phase's duration
    * @param getAlivePlayers Returns the players currently alive; only they may vote or be voted for
    * @param onChange Called after every phase change, including the meeting ending
-   * @param onResult Called with the tallied outcome when VOTING ends, before RESULTS begins
+   * @param onResult Called with the tallied outcome when VOTING ends, before RESULTS begins. Votes
+   *   from or for a player no longer alive are dropped first, so the outcome is always 'SKIP',
+   *   'TIE' or a living player. If it throws, the meeting still moves on to RESULTS.
    */
   constructor(
     settings: SessionSettings,
@@ -90,11 +93,7 @@ export default class MeetingManager {
     }
     this._caller = callerID;
     this._enterPhase('DISCUSSION', this._settings.discussionDurationSec, () =>
-      this._enterPhase('VOTING', this._settings.votingDurationSec, () => {
-        this._outcome = tallyVotes(this._voteList());
-        this._onResult(this._outcome);
-        this._enterPhase('RESULTS', this._settings.resultsDurationSec, () => this._end());
-      }),
+      this._enterPhase('VOTING', this._settings.votingDurationSec, () => this._closeVoting()),
     );
   }
 
@@ -151,6 +150,22 @@ export default class MeetingManager {
     this._caller = undefined;
     this._votes.clear();
     this._outcome = undefined;
+  }
+
+  private _closeVoting(): void {
+    // A player can die or leave after voting or being voted for; such votes no longer count.
+    const alive = this._getAlivePlayers();
+    this._votes.forEach((target, voter) => {
+      if (!alive.includes(voter) || (target !== 'SKIP' && !alive.includes(target))) {
+        this._votes.delete(voter);
+      }
+    });
+    this._outcome = tallyVotes(this._voteList());
+    try {
+      this._onResult(this._outcome);
+    } finally {
+      this._enterPhase('RESULTS', this._settings.resultsDurationSec, () => this._end());
+    }
   }
 
   private _voteList(): ImpostorVote[] {
