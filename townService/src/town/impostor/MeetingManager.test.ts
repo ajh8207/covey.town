@@ -7,14 +7,18 @@ describe('MeetingManager', () => {
     votingDurationSec: 20,
     resultsDurationSec: 5,
   });
+  let alive: string[];
   let onChange: jest.Mock;
+  let onResult: jest.Mock;
   let meeting: MeetingManager;
 
   beforeEach(() => {
     // Jest 28's fake timers fail on Node 18's read-only global performance
     jest.useFakeTimers({ doNotFake: ['performance'] });
+    alive = ['p1', 'p2', 'p3', 'p4'];
     onChange = jest.fn();
-    meeting = new MeetingManager(settings, onChange);
+    onResult = jest.fn();
+    meeting = new MeetingManager(settings, () => alive, onChange, onResult);
   });
 
   afterEach(() => {
@@ -77,5 +81,116 @@ describe('MeetingManager', () => {
     jest.advanceTimersByTime(60_000);
     expect(meeting.phase).toBeUndefined();
     expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  describe('Voting', () => {
+    // Starts a meeting and skips past DISCUSSION.
+    const startVoting = () => {
+      meeting.start('p1');
+      jest.advanceTimersByTime(10_000);
+    };
+
+    it.each(['DISCUSSION', 'RESULTS'])('Rejects votes during %s', phase => {
+      meeting.start('p1');
+      if (phase === 'RESULTS') {
+        jest.advanceTimersByTime(30_000);
+      }
+      expect(meeting.phase).toBe(phase);
+      expect(() => meeting.castVote('p1', 'p2')).toThrow('voting is not open');
+    });
+
+    it('Rejects votes when no meeting is active', () => {
+      expect(() => meeting.castVote('p1', 'p2')).toThrow('voting is not open');
+    });
+
+    it('Rejects a vote from a dead or unknown player', () => {
+      startVoting();
+      alive = ['p1', 'p2', 'p3'];
+      expect(() => meeting.castVote('p4', 'p1')).toThrow('voter is not alive');
+      expect(() => meeting.castVote('stranger', 'p1')).toThrow('voter is not alive');
+      expect(meeting.hasVoted).toEqual([]);
+    });
+
+    it('Rejects a vote for a dead or unknown target', () => {
+      startVoting();
+      alive = ['p1', 'p2', 'p3'];
+      expect(() => meeting.castVote('p1', 'p4')).toThrow('target is not alive');
+      expect(() => meeting.castVote('p1', 'stranger')).toThrow('target is not alive');
+      expect(meeting.hasVoted).toEqual([]);
+    });
+
+    it('Accepts SKIP and a self vote', () => {
+      startVoting();
+      meeting.castVote('p1', 'SKIP');
+      meeting.castVote('p2', 'p2');
+      expect(meeting.hasVoted).toEqual(['p1', 'p2']);
+    });
+
+    it('Lists each voter once in hasVoted, even after a re-vote', () => {
+      startVoting();
+      meeting.castVote('p1', 'p2');
+      meeting.castVote('p3', 'p2');
+      meeting.castVote('p1', 'p3');
+      expect(meeting.hasVoted).toEqual(['p1', 'p3']);
+    });
+
+    it('Passes the tally to onResult when VOTING ends, before RESULTS is announced', () => {
+      startVoting();
+      meeting.castVote('p1', 'p3');
+      meeting.castVote('p2', 'p3');
+      meeting.castVote('p3', 'SKIP');
+      onResult.mockImplementation(() => expect(meeting.phase).toBe('VOTING'));
+
+      jest.advanceTimersByTime(20_000 - 1);
+      expect(onResult).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(1);
+      expect(onResult).toHaveBeenCalledTimes(1);
+      expect(onResult).toHaveBeenCalledWith('p3');
+      expect(meeting.phase).toBe('RESULTS');
+    });
+
+    it('Counts the latest vote after a re-vote', () => {
+      startVoting();
+      meeting.castVote('p1', 'p2');
+      meeting.castVote('p1', 'p3');
+      jest.advanceTimersByTime(20_000);
+      expect(onResult).toHaveBeenCalledWith('p3');
+    });
+
+    it.each<[string, [string, string][], string]>([
+      ['no votes as SKIP', [], 'SKIP'],
+      [
+        'a tie as TIE',
+        [
+          ['p1', 'p2'],
+          ['p2', 'p1'],
+        ],
+        'TIE',
+      ],
+    ])('Reports %s', (_, cast, expected) => {
+      startVoting();
+      cast.forEach(([voter, target]) => meeting.castVote(voter, target));
+      jest.advanceTimersByTime(20_000);
+      expect(onResult).toHaveBeenCalledWith(expected);
+    });
+
+    it('Starts the next meeting with no votes', () => {
+      startVoting();
+      meeting.castVote('p1', 'p2');
+      jest.advanceTimersByTime(25_000);
+      startVoting();
+      expect(meeting.hasVoted).toEqual([]);
+      jest.advanceTimersByTime(20_000);
+      expect(onResult).toHaveBeenLastCalledWith('SKIP');
+    });
+
+    it('Does not call onResult after dispose', () => {
+      startVoting();
+      meeting.castVote('p1', 'p2');
+      meeting.dispose();
+      jest.advanceTimersByTime(60_000);
+      expect(onResult).not.toHaveBeenCalled();
+      expect(meeting.hasVoted).toEqual([]);
+    });
   });
 });
