@@ -57,11 +57,16 @@ export default class ImpostorShipScene extends Phaser.Scene {
   create(): void {
     this.cameras.main.setBackgroundColor('#30343b');
     const map = this.make.tilemap({ key: 'skeld-map' });
-   
-    const background = this.add.image(0, 0, 'skeld-bg').setOrigin(0, 0);
 
+    // Display the complete map as one image.
+    const background = this.add
+      .image(0, 0, 'skeld-bg')
+      .setOrigin(0, 0);
+
+    // Use the image dimensions for the camera bounds.
     const mapWidth = background.width;
     const mapHeight = background.height;
+
 
     // Red rectangle as a temporary player.
     this._player = this.add.rectangle(450, 300, 24, 24, 0xff0000);
@@ -71,10 +76,10 @@ export default class ImpostorShipScene extends Phaser.Scene {
         width: 24,
         height: 24,
       },
-      friction: 0,
-      frictionAir: 0,
-      restitution: 0,
-    });
+        friction: 0,
+        frictionAir: 0,
+        restitution: 0,
+      });
 
     this._player.setPosition(4300, 1200); // default spawn position, can be changed later
     // WASD controls.
@@ -144,7 +149,7 @@ export default class ImpostorShipScene extends Phaser.Scene {
           this.matter.body.setPosition(body, {
             x: body.position.x + (expectedCenterX - actualCenterX),
             y: body.position.y + (expectedCenterY - actualCenterY),
-          });
+          }, true);
         }
       });
     
