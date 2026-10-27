@@ -193,4 +193,60 @@ describe('MeetingManager', () => {
       expect(meeting.hasVoted).toEqual([]);
     });
   });
+
+  describe('toState', () => {
+    it('Reports only isMeetingActive when no meeting is active', () => {
+      expect(meeting.toState()).toEqual({ isMeetingActive: false });
+    });
+
+    it('Shows who voted but hides votes and the outcome until RESULTS', () => {
+      meeting.start('p1');
+      expect(meeting.toState()).toEqual({
+        isMeetingActive: true,
+        meetingPhase: 'DISCUSSION',
+        meetingCaller: 'p1',
+        hasVoted: [],
+        meetingTimerSec: 10,
+      });
+
+      jest.advanceTimersByTime(10_000);
+      meeting.castVote('p1', 'p3');
+      meeting.castVote('p2', 'SKIP');
+      const voting = meeting.toState();
+      expect(voting.hasVoted).toEqual(['p1', 'p2']);
+      expect(voting).not.toHaveProperty('votes');
+      expect(voting).not.toHaveProperty('ejectedPlayer');
+      expect(JSON.stringify(voting)).not.toContain('p3');
+
+      jest.advanceTimersByTime(20_000);
+      expect(meeting.toState()).toEqual({
+        isMeetingActive: true,
+        meetingPhase: 'RESULTS',
+        meetingCaller: 'p1',
+        hasVoted: ['p1', 'p2'],
+        votes: [
+          { voter: 'p1', target: 'p3' },
+          { voter: 'p2', target: 'SKIP' },
+        ],
+        ejectedPlayer: 'TIE',
+        meetingTimerSec: 5,
+      });
+    });
+
+    it('Counts meetingTimerSec down, rounding up, and resets it each phase', () => {
+      meeting.start('p1');
+      jest.advanceTimersByTime(1);
+      expect(meeting.toState().meetingTimerSec).toBe(10);
+      jest.advanceTimersByTime(9_000 - 1);
+      expect(meeting.toState().meetingTimerSec).toBe(1);
+      jest.advanceTimersByTime(1_000);
+      expect(meeting.toState().meetingTimerSec).toBe(20);
+    });
+
+    it('Reports the meeting as inactive once RESULTS ends', () => {
+      meeting.start('p1');
+      jest.advanceTimersByTime(35_000);
+      expect(meeting.toState()).toEqual({ isMeetingActive: false });
+    });
+  });
 });

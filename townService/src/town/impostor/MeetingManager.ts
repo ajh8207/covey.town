@@ -1,6 +1,23 @@
-import { ImpostorMeetingPhase, PlayerID } from '../../types/CoveyTownSocket';
+import {
+  ImpostorGameState,
+  ImpostorMeetingPhase,
+  ImpostorVote,
+  PlayerID,
+} from '../../types/CoveyTownSocket';
 import { SessionSettings } from './SessionSettings';
 import { tallyVotes, VoteOutcome } from './VoteTally';
+
+/** The meeting fields of the public game state */
+export type MeetingState = Pick<
+  ImpostorGameState,
+  | 'isMeetingActive'
+  | 'meetingPhase'
+  | 'meetingCaller'
+  | 'hasVoted'
+  | 'votes'
+  | 'ejectedPlayer'
+  | 'meetingTimerSec'
+>;
 
 /**
  * Runs one emergency meeting at a time: DISCUSSION, then VOTING, then RESULTS, each lasting the
@@ -22,7 +39,11 @@ export default class MeetingManager {
 
   private readonly _votes = new Map<PlayerID, PlayerID | 'SKIP'>();
 
+  private _outcome?: VoteOutcome;
+
   private _timer?: ReturnType<typeof setTimeout>;
+
+  private _phaseEndsAt = 0;
 
   /**
    * @param settings The session settings that give each phase's duration
@@ -70,7 +91,8 @@ export default class MeetingManager {
     this._caller = callerID;
     this._enterPhase('DISCUSSION', this._settings.discussionDurationSec, () =>
       this._enterPhase('VOTING', this._settings.votingDurationSec, () => {
-        this._onResult(tallyVotes([...this._votes].map(([voter, target]) => ({ voter, target }))));
+        this._outcome = tallyVotes(this._voteList());
+        this._onResult(this._outcome);
         this._enterPhase('RESULTS', this._settings.resultsDurationSec, () => this._end());
       }),
     );
@@ -99,6 +121,28 @@ export default class MeetingManager {
     this._votes.set(voterID, target);
   }
 
+  /**
+   * The meeting fields for the public game state. Votes and the outcome are included only in
+   * RESULTS, so no one sees who voted for whom before the reveal.
+   */
+  toState(): MeetingState {
+    if (!this._phase) {
+      return { isMeetingActive: false };
+    }
+    const state: MeetingState = {
+      isMeetingActive: true,
+      meetingPhase: this._phase,
+      meetingCaller: this._caller,
+      hasVoted: this.hasVoted,
+      meetingTimerSec: Math.max(0, Math.ceil((this._phaseEndsAt - Date.now()) / 1000)),
+    };
+    if (this._phase === 'RESULTS') {
+      state.votes = this._voteList();
+      state.ejectedPlayer = this._outcome;
+    }
+    return state;
+  }
+
   /** Stops the active meeting, if any, without calling onChange. Use when the game ends. */
   dispose(): void {
     clearTimeout(this._timer);
@@ -106,10 +150,16 @@ export default class MeetingManager {
     this._phase = undefined;
     this._caller = undefined;
     this._votes.clear();
+    this._outcome = undefined;
+  }
+
+  private _voteList(): ImpostorVote[] {
+    return [...this._votes].map(([voter, target]) => ({ voter, target }));
   }
 
   private _enterPhase(phase: ImpostorMeetingPhase, durationSec: number, next: () => void): void {
     this._phase = phase;
+    this._phaseEndsAt = Date.now() + durationSec * 1000;
     this._timer = setTimeout(next, durationSec * 1000);
     this._onChange();
   }
