@@ -43,7 +43,7 @@ export default class ImpostorShipScene extends Phaser.Scene {
    * the Skeld background image and the tilemap JSON file.
    */
   preload(): void {
-    this.load.image('skeld-bg', '/assets/tilesets/The_Skeld_map.jpg');
+    this.load.image('skeld-bg', '/assets/ship/The_Skeld_map.jpg');
     this.load.tilemapTiledJSON('skeld-map', '/assets/maps/skeld.json');
   }
 
@@ -77,14 +77,28 @@ export default class ImpostorShipScene extends Phaser.Scene {
       frictionAir: 0,
       restitution: 0,
     });
+    const playerBody = this._player.body as MatterJS.BodyType;
+    this.matter.body.setInertia(playerBody, Infinity);
 
     this._player.setPosition(4300, 1200); // default spawn position, can be changed later
     // WASD controls.
-    this._keys = this.input.keyboard!.addKeys('W,A,S,D') as typeof this._keys;
-
+    const keyboard = this.input.keyboard;
+    if (!keyboard) {
+      throw new Error('Keyboard input is unavailable');
+    }
+    this._keys = keyboard.addKeys('W,A,S,D') as {
+      W: Phaser.Input.Keyboard.Key;
+      A: Phaser.Input.Keyboard.Key;
+      S: Phaser.Input.Keyboard.Key;
+      D: Phaser.Input.Keyboard.Key;
+    };
     const collisionLayer = map.getObjectLayer('Collision');
 
-    collisionLayer.objects.forEach(obj => {
+    if (collisionLayer === null) {
+      console.warn('Collision layer not found in the tilemap.');
+    }
+
+    collisionLayer?.objects.forEach(obj => {
       if (!obj.polygon) {
         console.warn('Collision object does not have a polygon:', obj);
         return;
@@ -97,11 +111,15 @@ export default class ImpostorShipScene extends Phaser.Scene {
       const sin = Math.sin(angle);
 
       // Convert Tiled points to rotated world coordinates.
-      const vertices = obj.polygon.map(point => ({
-        x: x + point.x * cos - point.y * sin,
-        y: y + point.x * sin + point.y * cos,
-      }));
+      const vertices = obj.polygon.map(point => {
+        const px = point.x ?? 0;
+        const py = point.y ?? 0;
 
+        return {
+          x: x + px * cos - py * sin,
+          y: y + px * sin + py * cos,
+        };
+      });
       // Calculate the polygon's area centroid.
       let area2 = 0;
       let centroidX = 0;
@@ -133,6 +151,7 @@ export default class ImpostorShipScene extends Phaser.Scene {
         0.01,
         10,
       );
+
       if (body) {
         // Align the body's bounding box with the polygon's bounding box
         const xs = vertices.map(v => v.x);
@@ -156,7 +175,7 @@ export default class ImpostorShipScene extends Phaser.Scene {
 
     const camera = this.cameras.main;
     camera.setBounds(0, 0, mapWidth, mapHeight);
-    camera.setZoom(0.3);
+    camera.setZoom(0.5);
     camera.startFollow(this._player, true);
 
     this.input.keyboard?.once('keydown-ESC', () => {
@@ -168,7 +187,8 @@ export default class ImpostorShipScene extends Phaser.Scene {
   }
 
   /**
-   * Updates the player's position based on keyboard input (WASD) and applies velocity to the player's Matter.js body.
+   * Updates the player's position based on keyboard input (WASD)
+   * and applies velocity to the player's Matter.js body.
    * This method is called on every game tick.
    */
   update(): void {
