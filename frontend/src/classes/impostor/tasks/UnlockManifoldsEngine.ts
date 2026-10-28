@@ -1,3 +1,4 @@
+// test command: npm test -- --watchAll=false --runTestsByPath src/classes/impostor/tasks/UnlockManifoldsEngine.test.ts
 import { TaskEngine } from './TaskEngine';
 
 /**
